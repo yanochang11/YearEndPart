@@ -53,9 +53,10 @@ This is a simple web application for event check-in and check-out using Streamli
     cd event-check-in
     ```
 
-2.  **Configure Credentials**:
+2.  **Configure Credentials and Admin Password**:
     -   Open the `.streamlit/secrets.toml` file.
-    -   Copy the contents of your downloaded `credentials.json` file and paste them into the `secrets.toml` file, matching the keys.
+    -   Copy the contents of your downloaded `credentials.json` file and paste them into the `secrets.toml` file, matching the keys under the `[gcp_service_account]` section.
+    -   Set a password for the admin panel by changing the `password` value under the `[admin]` section.
 
 3.  **Install Dependencies**:
     ```bash

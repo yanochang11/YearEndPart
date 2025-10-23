@@ -82,10 +82,33 @@ def main():
     GOOGLE_SHEET_NAME = "Event_Check-in"
     WORKSHEET_NAME = "Sheet1"
 
+    # Initialize session state for authentication
+    if 'authenticated' not in st.session_state:
+        st.session_state.authenticated = False
+
     with st.expander("Admin Panel"):
-        mode = st.radio("Mode", ["Check-in", "Check-out"], key="mode")
-        start_time = st.time_input("Start Time", time(9, 0), key="start_time")
-        end_time = st.time_input("End Time", time(17, 0), key="end_time")
+        if not st.session_state.authenticated:
+            password = st.text_input("Enter password to access admin panel:", type="password")
+            if st.button("Login"):
+                if password == st.secrets.admin.password:
+                    st.session_state.authenticated = True
+                    st.rerun()
+                else:
+                    st.error("Incorrect password")
+        else:
+            st.success("Authenticated")
+            mode = st.radio("Mode", ["Check-in", "Check-out"], key="mode")
+            start_time = st.time_input("Start Time", time(9, 0), key="start_time")
+            end_time = st.time_input("End Time", time(17, 0), key="end_time")
+            if st.button("Logout"):
+                st.session_state.authenticated = False
+                st.rerun()
+
+    # Default values if not authenticated
+    if not st.session_state.authenticated:
+        mode = "Check-in"  # Or any default/safe mode
+        start_time = time(0, 0)
+        end_time = time(0, 0)
 
     now = datetime.now().time()
     if not (start_time <= now <= end_time):
