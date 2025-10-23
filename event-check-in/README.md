@@ -63,9 +63,16 @@ This is a simple web application for event check-in and check-out using Streamli
     ```
 
 4.  **Run the Application**:
+    > **Important:** This is a Streamlit application and must be run with the `streamlit run` command.
     ```bash
     streamlit run app.py
     ```
+
+## Troubleshooting
+
+### `st.cache` Deprecation Warning
+
+You may see a warning about `st.cache` being deprecated. This is a known issue with the `streamlit-cookies-manager` library and can be safely ignored. The application will still function correctly.
 
 ## `requirements.txt`
 

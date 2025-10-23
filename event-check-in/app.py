@@ -68,6 +68,14 @@ def update_cell(client, sheet_name, worksheet_name, row, col, value):
 
 # --- Main App ---
 def main():
+    if not st.runtime.exists():
+        print("---")
+        print("This app must be run with `streamlit run`.")
+        print("Please run `streamlit run app.py` to view this application.")
+        print("---")
+        return
+
+    st.set_page_config(page_title="Event Check-in/out System")
     st.title("Event Check-in/out System")
     cookies = CookieManager()
 
