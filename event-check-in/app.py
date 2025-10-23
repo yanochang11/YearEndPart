@@ -82,13 +82,19 @@ def main():
     GOOGLE_SHEET_NAME = "Event_Check-in"
     WORKSHEET_NAME = "Sheet1"
 
-    # Initialize session state for authentication
+    # Initialize session state
     if 'authenticated' not in st.session_state:
         st.session_state.authenticated = False
+    if 'mode' not in st.session_state:
+        st.session_state.mode = "Check-in"
+    if 'start_time' not in st.session_state:
+        st.session_state.start_time = time(9, 0)
+    if 'end_time' not in st.session_state:
+        st.session_state.end_time = time(17, 0)
 
     with st.expander("Admin Panel"):
         if not st.session_state.authenticated:
-            password = st.text_input("Enter password to access admin panel:", type="password")
+            password = st.text_input("Enter password to access admin panel:", type="password", key="password_input")
             if st.button("Login"):
                 if password == st.secrets.admin.password:
                     st.session_state.authenticated = True
@@ -97,21 +103,17 @@ def main():
                     st.error("Incorrect password")
         else:
             st.success("Authenticated")
-            mode = st.radio("Mode", ["Check-in", "Check-out"], key="mode")
-            start_time = st.time_input("Start Time", time(9, 0), key="start_time")
-            end_time = st.time_input("End Time", time(17, 0), key="end_time")
+            # Update session state directly when admin changes settings
+            st.session_state.mode = st.radio("Mode", ["Check-in", "Check-out"], index=["Check-in", "Check-out"].index(st.session_state.mode))
+            st.session_state.start_time = st.time_input("Start Time", st.session_state.start_time)
+            st.session_state.end_time = st.time_input("End Time", st.session_state.end_time)
             if st.button("Logout"):
                 st.session_state.authenticated = False
                 st.rerun()
 
-    # Default values if not authenticated
-    if not st.session_state.authenticated:
-        mode = "Check-in"  # Or any default/safe mode
-        start_time = time(0, 0)
-        end_time = time(0, 0)
-
+    # Use settings from session state for the check
     now = datetime.now().time()
-    if not (start_time <= now <= end_time):
+    if not (st.session_state.start_time <= now <= st.session_state.end_time):
         st.warning("Not currently open for check-in/out.")
         return
 
@@ -136,7 +138,7 @@ def main():
 
         row_index = employee_row.index[0] + 2 # +2 for header and 1-based index
 
-        if mode == "Check-in":
+        if st.session_state.mode == "Check-in":
             handle_check_in(employee_id, employee_row, row_index, client, cookies)
         else: # Check-out
             handle_check_out(employee_row, row_index, client)

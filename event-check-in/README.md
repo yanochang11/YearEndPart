@@ -69,6 +69,33 @@ This is a simple web application for event check-in and check-out using Streamli
     streamlit run app.py
     ```
 
+## Deployment
+
+The easiest way to deploy this application is to use the free Streamlit Community Cloud.
+
+### 1. Create a GitHub Repository
+
+- Create a new public repository on GitHub.
+- Push the entire `event-check-in` directory to this new repository. Ensure that your `.streamlit/secrets.toml` is **not** included in the push. You can add it to a `.gitignore` file to be safe.
+
+### 2. Sign Up for Streamlit Community Cloud
+
+- Go to the [Streamlit Community Cloud](https://share.streamlit.io/) and sign up using your GitHub account.
+
+### 3. Deploy the Application
+
+- From your Streamlit Community Cloud dashboard, click "New app".
+- Select the GitHub repository you just created.
+- The main file path should be `app.py`.
+- Click "Deploy!".
+
+### 4. Add Your Secrets
+
+- After the initial deployment, the application will show an error because the secrets are missing.
+- In your Streamlit Community Cloud dashboard, go to the settings for your app and find the "Secrets" section.
+- Copy the entire content of your local `.streamlit/secrets.toml` file and paste it into the secrets manager on the cloud.
+- Click "Save". The application will automatically restart with the new secrets.
+
 ## Troubleshooting
 
 ### `st.cache` Deprecation Warning
