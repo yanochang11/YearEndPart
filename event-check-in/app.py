@@ -100,7 +100,7 @@ def main():
     GOOGLE_SHEET_NAME = "Event_Check-in"
     WORKSHEET_NAME = "Sheet1"
 
-    with st.sidebar.expander("Admin Panel", expanded=not st.session_state.authenticated):
+    with st.sidebar.expander("Admin Panel", expanded=False):
         if not st.session_state.authenticated:
             password = st.text_input("Enter password to access admin panel:", type="password", key="password_input")
             if st.button("Login"):
