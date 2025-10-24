@@ -38,7 +38,8 @@ This is a simple web application for event check-in and check-out using Streamli
 ### 2. Google Sheet Setup
 
 1.  **Create Google Sheet and Worksheets**:
-    -   Create a new Google Sheet. The default first sheet will be used for check-in data. Rename it if you like (e.g., to "Check-ins"), but make sure the first three columns are `EmployeeID`, `Name`, and `TableNo`.
+    -   Create a new Google Sheet. The default first sheet will be used for check-in data.
+    -   Set the headers for the first five columns in the first row to be exactly: `EmployeeID`, `Name`, `TableNo`, `CheckInTime`, `CheckOutTime`.
     -   Create a second worksheet and name it **Settings**. This sheet will be used to control the application's global settings.
     -   In the "Settings" worksheet, set up the following headers in the first row:
         - Cell A1: `Mode`
