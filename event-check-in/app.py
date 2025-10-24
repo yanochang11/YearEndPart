@@ -219,24 +219,31 @@ def main():
 
 
 def handle_check_in(employee_id, employee_row, row_index, client, cookies):
+    # 1. Check if the device has already been used by checking for the cookie's existence.
+    if 'event_checked_in' in cookies:
+        st.warning("此裝置已完成報到，如需為他人報到，請使用其他裝置 / This device has already been used for check-in.")
+        return
+
+    # 2. Check the Google Sheet to see if this specific employee has already checked in.
     check_in_time = employee_row['CheckInTime'].iloc[0]
     if pd.notna(check_in_time) and check_in_time != '':
         st.warning("您已報到，無須重複操作 / You have already checked in.")
         return
 
-    if cookies.get('event_checked_in') == employee_id:
-        st.warning("您已報到，無須重複操作 / You have already checked in.")
-        return
-
+    # 3. If all checks pass, proceed with the check-in process.
     name = employee_row['Name'].iloc[0]
     table_no = employee_row['TableNo'].iloc[0]
     tz = pytz.timezone(TIMEZONE)
     timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
 
-    # Assuming 'CheckInTime' is the 4th column (D)
+    # Update the Google Sheet
     update_cell(client, "Event_Check-in", "Sheet1", row_index, 4, timestamp)
-    cookies['event_checked_in'] = employee_id
+
+    # Set the cookie to block further check-ins from this device.
+    # The value is set to "true"; its presence is what matters.
+    cookies['event_checked_in'] = "true"
     cookies.save()
+
     st.success(f"報到成功！歡迎 {name}，您的桌號在 {table_no} / Check-in successful! Welcome {name}, your table is {table_no}")
 
 
