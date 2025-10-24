@@ -8,7 +8,7 @@ This is a simple web application for event check-in and check-out using Streamli
 -   **Admin Panel**: An admin panel to switch between "Check-in" and "Check-out" modes and to set the time window for the operations.
 -   **Google Sheets Integration**: Uses a Google Sheet as the backend database to store employee information and timestamps.
 -   **Caching**: Caches the Google Sheet data to minimize API calls and handle concurrent users.
--   **Cookie-based Check-in**: Sets a browser cookie to prevent duplicate check-ins.
+-   **Cookie-based Check-in**: Sets a browser session cookie to prevent duplicate check-ins. The cookie expires when the browser is closed.
 
 ## Setup Instructions
 

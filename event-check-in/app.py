@@ -80,8 +80,8 @@ def main():
         print("---")
         return
 
-    st.set_page_config(page_title="Event Check-in/out System", initial_sidebar_state="collapsed")
-    st.title("Event Check-in/out System")
+    st.set_page_config(page_title="Event Check-in/out System 尾牙報到系統", initial_sidebar_state="collapsed")
+    st.title("Event Check-in/out System 尾牙報到系統")
     cookies = CookieManager()
     if not cookies.ready():
         st.stop()
@@ -101,34 +101,34 @@ def main():
         st.session_state.search_term = ""
 
     # --- Main App ---
-    st.markdown(f"**Current Mode:** `{st.session_state.mode}`")
+    st.markdown(f"**目前模式 / Current Mode:** `{st.session_state.mode}`")
 
     GOOGLE_SHEET_NAME = "Event_Check-in"
     WORKSHEET_NAME = "Sheet1"
 
-    with st.sidebar.expander("Admin Panel", expanded=False):
+    with st.sidebar.expander("管理員面板 / Admin Panel", expanded=False):
         if not st.session_state.authenticated:
-            password = st.text_input("Enter password to access admin panel:", type="password", key="password_input")
-            if st.button("Login"):
+            password = st.text_input("請輸入密碼 / Enter password:", type="password", key="password_input")
+            if st.button("登入 / Login"):
                 if password == st.secrets.admin.password:
                     st.session_state.authenticated = True
                     st.rerun()
                 else:
-                    st.error("Incorrect password")
+                    st.error("密碼錯誤 / Incorrect password")
         else:
-            st.success("Authenticated")
+            st.success("已認證 / Authenticated")
             # Update session state directly when admin changes settings
-            st.session_state.mode = st.radio("Mode", ["Check-in", "Check-out"], index=["Check-in", "Check-out"].index(st.session_state.mode))
-            st.session_state.start_time = st.time_input("Start Time", st.session_state.start_time)
-            st.session_state.end_time = st.time_input("End Time", st.session_state.end_time)
-            if st.button("Logout"):
+            st.session_state.mode = st.radio("模式 / Mode", ["Check-in", "Check-out"], index=["Check-in", "Check-out"].index(st.session_state.mode))
+            st.session_state.start_time = st.time_input("開始時間 / Start Time", st.session_state.start_time)
+            st.session_state.end_time = st.time_input("結束時間 / End Time", st.session_state.end_time)
+            if st.button("登出 / Logout"):
                 st.session_state.authenticated = False
                 st.rerun()
 
     # Use settings from session state for the check
     now = datetime.now().time()
     if not (st.session_state.start_time <= now <= st.session_state.end_time):
-        st.warning("Not currently open for check-in/out.")
+        st.warning("報到尚未開始或已結束 / Not currently open for check-in/out.")
         return
 
     client = get_gsheet()
@@ -138,11 +138,11 @@ def main():
         return
 
     # --- Search and Selection Logic ---
-    st.session_state.search_term = st.text_input("請輸入您的員工編號 (EmployeeID) 或中文名字:", value=st.session_state.search_term).strip()
+    st.session_state.search_term = st.text_input("請輸入您的員工編號或姓名 / Please enter your Employee ID or Name:", value=st.session_state.search_term).strip()
 
-    if st.button("確認"):
+    if st.button("確認 / Confirm"):
         if not st.session_state.search_term:
-            st.error("請輸入您的員工編號或名字")
+            st.error("請輸入您的員工編號或名字 / Please enter your Employee ID or Name")
             return
 
         # Search by both EmployeeID and Name
@@ -157,14 +157,14 @@ def main():
             else:
                 # Multiple matches found, prompt user to select
                 st.session_state.selected_employee_id = None # Clear previous selection
-                st.warning("找到多位同名員工，請選擇一位:")
+                st.warning("找到多位同名員工，請選擇一位 / Multiple employees found with the same name, please select one:")
                 for index, row in name_match.iterrows():
                     if st.button(f"{row['Name']} ({row['EmployeeID']})"):
                         st.session_state.selected_employee_id = row['EmployeeID']
                         st.rerun() # Rerun to process the selection
                 return # Stop further processing until a selection is made
         else:
-            st.error("查無此人，請確認輸入是否正確，或洽詢工作人員。")
+            st.error("查無此人，請確認輸入是否正確，或洽詢工作人員 / User not found, please check your input or contact staff.")
             st.session_state.selected_employee_id = None
             return
 
@@ -186,11 +186,11 @@ def main():
 def handle_check_in(employee_id, employee_row, row_index, client, cookies):
     check_in_time = employee_row['CheckInTime'].iloc[0]
     if pd.notna(check_in_time) and check_in_time != '':
-        st.warning("您已報到，無須重複操作")
+        st.warning("您已報到，無須重複操作 / You have already checked in.")
         return
 
     if cookies.get('event_checked_in') == employee_id:
-        st.warning("您已報到，無須重複操作")
+        st.warning("您已報到，無須重複操作 / You have already checked in.")
         return
 
     name = employee_row['Name'].iloc[0]
@@ -200,19 +200,19 @@ def handle_check_in(employee_id, employee_row, row_index, client, cookies):
     # Assuming 'CheckInTime' is the 4th column (D)
     update_cell(client, "Event_Check-in", "Sheet1", row_index, 4, timestamp)
     cookies['event_checked_in'] = employee_id
-    st.success(f"報到成功！{name}，您的桌號在 {table_no}")
+    st.success(f"報到成功！歡迎 {name}，您的桌號在 {table_no} / Check-in successful! Welcome {name}, your table is {table_no}")
 
 
 def handle_check_out(employee_row, row_index, client):
     check_out_time = employee_row['CheckOutTime'].iloc[0]
     if pd.notna(check_out_time) and check_out_time != '':
-        st.warning("您已完成簽退")
+        st.warning("您已完成簽退 / You have already checked out.")
         return
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     # Assuming 'CheckOutTime' is the 5th column (E)
     update_cell(client, "Event_Check-in", "Sheet1", row_index, 5, timestamp)
-    st.success("簽退成功，祝您有個美好的一天！")
+    st.success("簽退成功，祝您有個美好的一天！ / Check-out successful, have a nice day!")
 
 
 if __name__ == "__main__":
