@@ -80,7 +80,7 @@ def main():
         print("---")
         return
 
-    st.set_page_config(page_title="Event Check-in/out System")
+    st.set_page_config(page_title="Event Check-in/out System", initial_sidebar_state="collapsed")
     st.title("Event Check-in/out System")
     cookies = CookieController()
 
