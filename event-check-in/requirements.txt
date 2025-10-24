@@ -1,0 +1,6 @@
+streamlit
+gspread
+pandas
+gspread-dataframe
+oauth2client
+streamlit-cookies-manager
