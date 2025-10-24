@@ -84,6 +84,9 @@ def main():
     st.title("Event Check-in/out System")
     cookies = CookieController()
 
+    # --- Main App ---
+    st.markdown(f"**Current Mode:** `{st.session_state.mode}`")
+
     GOOGLE_SHEET_NAME = "Event_Check-in"
     WORKSHEET_NAME = "Sheet1"
 
@@ -97,7 +100,7 @@ def main():
     if 'end_time' not in st.session_state:
         st.session_state.end_time = time(17, 0)
 
-    with st.expander("Admin Panel"):
+    with st.sidebar.expander("Admin Panel", expanded=not st.session_state.authenticated):
         if not st.session_state.authenticated:
             password = st.text_input("Enter password to access admin panel:", type="password", key="password_input")
             if st.button("Login"):
