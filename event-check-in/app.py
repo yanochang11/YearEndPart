@@ -3,8 +3,8 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
-from datetime import datetime, time
-from streamlit_cookies_manager import CookieManager
+from datetime import datetime, time, timedelta
+from streamlit_cookies_controller import CookieController
 
 # --- Google Sheets Connection ---
 @st.cache_resource(ttl=600)
@@ -39,6 +39,7 @@ def get_data(_client, sheet_name, worksheet_name):
         return data
     except gspread.exceptions.SpreadsheetNotFound:
         st.warning(f"Spreadsheet '{sheet_name}' not found. Using mock data instead.")
+        st.session_state.mock_mode = True
         return create_mock_data()
     except gspread.exceptions.WorksheetNotFound:
         st.error(f"Worksheet '{worksheet_name}' not found.")
@@ -58,6 +59,10 @@ def create_mock_data():
 
 def update_cell(client, sheet_name, worksheet_name, row, col, value):
     """Updates a single cell in the Google Sheet."""
+    if st.session_state.get('mock_mode', False):
+        st.info("Mock mode: Simulating a successful update.")
+        return
+
     try:
         sheet = client.open(sheet_name).worksheet(worksheet_name)
         sheet.update_cell(row, col, value)
@@ -77,7 +82,7 @@ def main():
 
     st.set_page_config(page_title="Event Check-in/out System")
     st.title("Event Check-in/out System")
-    cookies = CookieManager()
+    cookies = CookieController()
 
     GOOGLE_SHEET_NAME = "Event_Check-in"
     WORKSHEET_NAME = "Sheet1"
@@ -156,10 +161,12 @@ def handle_check_in(employee_id, employee_row, row_index, client, cookies):
     name = employee_row['Name'].iloc[0]
     table_no = employee_row['TableNo'].iloc[0]
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    expires = datetime.now() + timedelta(hours=24)
+
 
     # Assuming 'CheckInTime' is the 4th column (D)
     update_cell(client, "Event_Check-in", "Sheet1", row_index, 4, timestamp)
-    cookies.set('event_checked_in', employee_id, expires_in=86400) # 24 hours
+    cookies.set('event_checked_in', employee_id, expires=expires)
     st.success(f"報到成功！{name}，您的桌號在 {table_no}")
 
 
