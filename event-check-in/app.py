@@ -4,7 +4,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 from datetime import datetime, time, timedelta
-from streamlit_cookies_manager import CookieManager
+from streamlit_cookies_manager import EncryptedCookieManager
 import pytz
 
 # --- Timezone Configuration ---
@@ -98,13 +98,12 @@ def save_settings(client, sheet_name, mode, start_time, end_time):
         return
     try:
         settings_sheet = client.open(sheet_name).worksheet("Settings")
-        settings_sheet.update('A2', mode)
-        settings_sheet.update('B2', start_time.strftime('%H:%M'))
-        settings_sheet.update('C2', end_time.strftime('%H:%M'))
+        # Update the range A2:C2 with a list of lists
+        settings_sheet.update('A2:C2', [[mode, start_time.strftime('%H:%M'), end_time.strftime('%H:%M')]])
         get_settings.clear() # Clear cache after saving
-        st.success("Settings saved successfully!")
+        st.success("設定已儲存 / Settings saved successfully!")
     except Exception as e:
-        st.error(f"Failed to save settings: {e}")
+        st.error(f"儲存設定失敗 / Failed to save settings: {e}")
 
 
 # --- Main App ---
@@ -118,7 +117,9 @@ def main():
 
     st.set_page_config(page_title="Event Check-in/out System 尾牙報到系統", initial_sidebar_state="collapsed")
     st.title("Event Check-in/out System 尾牙報到系統")
-    cookies = CookieManager()
+    cookies = EncryptedCookieManager(
+        password=st.secrets.cookies.password,
+    )
     if not cookies.ready():
         st.stop()
 
@@ -235,6 +236,7 @@ def handle_check_in(employee_id, employee_row, row_index, client, cookies):
     # Assuming 'CheckInTime' is the 4th column (D)
     update_cell(client, "Event_Check-in", "Sheet1", row_index, 4, timestamp)
     cookies['event_checked_in'] = employee_id
+    cookies.save()
     st.success(f"報到成功！歡迎 {name}，您的桌號在 {table_no} / Check-in successful! Welcome {name}, your table is {table_no}")
 
 
