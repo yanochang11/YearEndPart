@@ -37,8 +37,17 @@ This is a simple web application for event check-in and check-out using Streamli
 
 ### 2. Google Sheet Setup
 
-1.  **Create a new Google Sheet**:
-    -   The sheet must contain the following columns in this order: `EmployeeID`, `Name`, `TableNo`, `CheckInTime`, `CheckOutTime`.
+1.  **Create Google Sheet and Worksheets**:
+    -   Create a new Google Sheet. The default first sheet will be used for check-in data. Rename it if you like (e.g., to "Check-ins"), but make sure the first three columns are `EmployeeID`, `Name`, and `TableNo`.
+    -   Create a second worksheet and name it **Settings**. This sheet will be used to control the application's global settings.
+    -   In the "Settings" worksheet, set up the following headers in the first row:
+        - Cell A1: `Mode`
+        - Cell B1: `StartTime`
+        - Cell C1: `EndTime`
+    -   In the second row, provide the initial values:
+        - Cell A2: `Check-in`
+        - Cell B2: `09:00`
+        - Cell C2: `17:00`
 
 2.  **Share the Google Sheet**:
     -   Open the `credentials.json` file and find the `client_email` value.
@@ -68,6 +77,12 @@ This is a simple web application for event check-in and check-out using Streamli
     ```bash
     streamlit run app.py
     ```
+
+## Configuration
+
+### Timezone
+
+The application is configured to use the `Asia/Taipei` timezone by default. If you need to use a different timezone, you can change the `TIMEZONE` variable at the top of the `app.py` file.
 
 ## Deployment
 

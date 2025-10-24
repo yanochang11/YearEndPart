@@ -5,6 +5,10 @@ import pandas as pd
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 from datetime import datetime, time, timedelta
 from streamlit_cookies_manager import CookieManager
+import pytz
+
+# --- Timezone Configuration ---
+TIMEZONE = "Asia/Taipei"
 
 # --- Google Sheets Connection ---
 @st.cache_resource(ttl=600)
@@ -71,6 +75,38 @@ def update_cell(client, sheet_name, worksheet_name, row, col, value):
     except Exception as e:
         st.error(f"Failed to update Google Sheet: {e}")
 
+# --- Settings Management ---
+@st.cache_data(ttl=60)
+def get_settings(_client, sheet_name):
+    """Fetches settings from the 'Settings' worksheet."""
+    try:
+        settings_sheet = _client.open(sheet_name).worksheet("Settings")
+        mode = settings_sheet.acell('A2').value
+        start_time_str = settings_sheet.acell('B2').value
+        end_time_str = settings_sheet.acell('C2').value
+        start_time = datetime.strptime(start_time_str, '%H:%M').time()
+        end_time = datetime.strptime(end_time_str, '%H:%M').time()
+        return {"mode": mode, "start_time": start_time, "end_time": end_time}
+    except Exception as e:
+        st.error(f"Could not load settings from Google Sheet: {e}. Using default settings.")
+        return {"mode": "Check-in", "start_time": time(9, 0), "end_time": time(17, 0)}
+
+def save_settings(client, sheet_name, mode, start_time, end_time):
+    """Saves settings to the 'Settings' worksheet."""
+    if st.session_state.get('mock_mode', False):
+        st.info("Mock mode: Simulating a successful settings save.")
+        return
+    try:
+        settings_sheet = client.open(sheet_name).worksheet("Settings")
+        settings_sheet.update('A2', mode)
+        settings_sheet.update('B2', start_time.strftime('%H:%M'))
+        settings_sheet.update('C2', end_time.strftime('%H:%M'))
+        get_settings.clear() # Clear cache after saving
+        st.success("Settings saved successfully!")
+    except Exception as e:
+        st.error(f"Failed to save settings: {e}")
+
+
 # --- Main App ---
 def main():
     if not st.runtime.exists():
@@ -86,25 +122,22 @@ def main():
     if not cookies.ready():
         st.stop()
 
-    # Initialize session state
+    # Initialize session state for user-specific data
     if 'authenticated' not in st.session_state:
         st.session_state.authenticated = False
-    if 'mode' not in st.session_state:
-        st.session_state.mode = "Check-in"
-    if 'start_time' not in st.session_state:
-        st.session_state.start_time = time(9, 0)
-    if 'end_time' not in st.session_state:
-        st.session_state.end_time = time(17, 0)
     if 'selected_employee_id' not in st.session_state:
         st.session_state.selected_employee_id = None
     if 'search_term' not in st.session_state:
         st.session_state.search_term = ""
 
-    # --- Main App ---
-    st.markdown(f"**目前模式 / Current Mode:** `{st.session_state.mode}`")
-
     GOOGLE_SHEET_NAME = "Event_Check-in"
     WORKSHEET_NAME = "Sheet1"
+
+    client = get_gsheet()
+    settings = get_settings(client, GOOGLE_SHEET_NAME)
+
+    # --- Main App ---
+    st.markdown(f"**目前模式 / Current Mode:** `{settings['mode']}`")
 
     with st.sidebar.expander("管理員面板 / Admin Panel", expanded=False):
         if not st.session_state.authenticated:
@@ -117,21 +150,22 @@ def main():
                     st.error("密碼錯誤 / Incorrect password")
         else:
             st.success("已認證 / Authenticated")
-            # Update session state directly when admin changes settings
-            st.session_state.mode = st.radio("模式 / Mode", ["Check-in", "Check-out"], index=["Check-in", "Check-out"].index(st.session_state.mode))
-            st.session_state.start_time = st.time_input("開始時間 / Start Time", st.session_state.start_time)
-            st.session_state.end_time = st.time_input("結束時間 / End Time", st.session_state.end_time)
+            mode = st.radio("模式 / Mode", ["Check-in", "Check-out"], index=["Check-in", "Check-out"].index(settings['mode']))
+            start_time = st.time_input("開始時間 / Start Time", settings['start_time'])
+            end_time = st.time_input("結束時間 / End Time", settings['end_time'])
+            if st.button("儲存設定 / Save Settings"):
+                save_settings(client, GOOGLE_SHEET_NAME, mode, start_time, end_time)
             if st.button("登出 / Logout"):
                 st.session_state.authenticated = False
                 st.rerun()
 
-    # Use settings from session state for the check
-    now = datetime.now().time()
-    if not (st.session_state.start_time <= now <= st.session_state.end_time):
+    # Use settings from Google Sheet for the check
+    tz = pytz.timezone(TIMEZONE)
+    now = datetime.now(tz).time()
+    if not (settings['start_time'] <= now <= settings['end_time']):
         st.warning("報到尚未開始或已結束 / Not currently open for check-in/out.")
         return
 
-    client = get_gsheet()
     df = get_data(client, GOOGLE_SHEET_NAME, WORKSHEET_NAME)
 
     if df.empty:
@@ -173,7 +207,7 @@ def main():
         employee_row = df[df['EmployeeID'] == employee_id]
         row_index = employee_row.index[0] + 2
 
-        if st.session_state.mode == "Check-in":
+        if settings['mode'] == "Check-in":
             handle_check_in(employee_id, employee_row, row_index, client, cookies)
         else: # Check-out
             handle_check_out(employee_row, row_index, client)
@@ -195,7 +229,8 @@ def handle_check_in(employee_id, employee_row, row_index, client, cookies):
 
     name = employee_row['Name'].iloc[0]
     table_no = employee_row['TableNo'].iloc[0]
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    tz = pytz.timezone(TIMEZONE)
+    timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
 
     # Assuming 'CheckInTime' is the 4th column (D)
     update_cell(client, "Event_Check-in", "Sheet1", row_index, 4, timestamp)
@@ -209,7 +244,8 @@ def handle_check_out(employee_row, row_index, client):
         st.warning("您已完成簽退 / You have already checked out.")
         return
 
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    tz = pytz.timezone(TIMEZONE)
+    timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
     # Assuming 'CheckOutTime' is the 5th column (E)
     update_cell(client, "Event_Check-in", "Sheet1", row_index, 5, timestamp)
     st.success("簽退成功，祝您有個美好的一天！ / Check-out successful, have a nice day!")
