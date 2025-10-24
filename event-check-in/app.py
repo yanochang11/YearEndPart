@@ -84,12 +84,6 @@ def main():
     st.title("Event Check-in/out System")
     cookies = CookieController()
 
-    # --- Main App ---
-    st.markdown(f"**Current Mode:** `{st.session_state.mode}`")
-
-    GOOGLE_SHEET_NAME = "Event_Check-in"
-    WORKSHEET_NAME = "Sheet1"
-
     # Initialize session state
     if 'authenticated' not in st.session_state:
         st.session_state.authenticated = False
@@ -99,6 +93,12 @@ def main():
         st.session_state.start_time = time(9, 0)
     if 'end_time' not in st.session_state:
         st.session_state.end_time = time(17, 0)
+
+    # --- Main App ---
+    st.markdown(f"**Current Mode:** `{st.session_state.mode}`")
+
+    GOOGLE_SHEET_NAME = "Event_Check-in"
+    WORKSHEET_NAME = "Sheet1"
 
     with st.sidebar.expander("Admin Panel", expanded=not st.session_state.authenticated):
         if not st.session_state.authenticated:
