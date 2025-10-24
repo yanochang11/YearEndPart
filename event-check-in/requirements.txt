@@ -3,4 +3,4 @@ gspread
 pandas
 gspread-dataframe
 oauth2client
-streamlit-cookies-controller
+streamlit-cookies-manager

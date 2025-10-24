@@ -4,7 +4,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 from datetime import datetime, time, timedelta
-from streamlit_cookies_controller import CookieController
+from streamlit_cookies_manager import CookieManager
 
 # --- Google Sheets Connection ---
 @st.cache_resource(ttl=600)
@@ -82,7 +82,9 @@ def main():
 
     st.set_page_config(page_title="Event Check-in/out System", initial_sidebar_state="collapsed")
     st.title("Event Check-in/out System")
-    cookies = CookieController()
+    cookies = CookieManager()
+    if not cookies.ready():
+        st.stop()
 
     # Initialize session state
     if 'authenticated' not in st.session_state:
@@ -93,6 +95,10 @@ def main():
         st.session_state.start_time = time(9, 0)
     if 'end_time' not in st.session_state:
         st.session_state.end_time = time(17, 0)
+    if 'selected_employee_id' not in st.session_state:
+        st.session_state.selected_employee_id = None
+    if 'search_term' not in st.session_state:
+        st.session_state.search_term = ""
 
     # --- Main App ---
     st.markdown(f"**Current Mode:** `{st.session_state.mode}`")
@@ -125,31 +131,57 @@ def main():
         st.warning("Not currently open for check-in/out.")
         return
 
-    employee_id = st.text_input("請輸入您的員工編號 (EmployeeID):").strip()
+    client = get_gsheet()
+    df = get_data(client, GOOGLE_SHEET_NAME, WORKSHEET_NAME)
+
+    if df.empty:
+        return
+
+    # --- Search and Selection Logic ---
+    st.session_state.search_term = st.text_input("請輸入您的員工編號 (EmployeeID) 或中文名字:", value=st.session_state.search_term).strip()
 
     if st.button("確認"):
-        if not employee_id:
-            st.error("請輸入您的員工編號")
+        if not st.session_state.search_term:
+            st.error("請輸入您的員工編號或名字")
             return
 
-        client = get_gsheet()
-        df = get_data(client, GOOGLE_SHEET_NAME, WORKSHEET_NAME)
+        # Search by both EmployeeID and Name
+        id_match = df[df['EmployeeID'] == st.session_state.search_term]
+        name_match = df[df['Name'] == st.session_state.search_term]
 
-        if df.empty:
+        if not id_match.empty:
+            st.session_state.selected_employee_id = id_match['EmployeeID'].iloc[0]
+        elif not name_match.empty:
+            if len(name_match) == 1:
+                st.session_state.selected_employee_id = name_match['EmployeeID'].iloc[0]
+            else:
+                # Multiple matches found, prompt user to select
+                st.session_state.selected_employee_id = None # Clear previous selection
+                st.warning("找到多位同名員工，請選擇一位:")
+                for index, row in name_match.iterrows():
+                    if st.button(f"{row['Name']} ({row['EmployeeID']})"):
+                        st.session_state.selected_employee_id = row['EmployeeID']
+                        st.rerun() # Rerun to process the selection
+                return # Stop further processing until a selection is made
+        else:
+            st.error("查無此人，請確認輸入是否正確，或洽詢工作人員。")
+            st.session_state.selected_employee_id = None
             return
 
+    if st.session_state.selected_employee_id:
+        employee_id = st.session_state.selected_employee_id
         employee_row = df[df['EmployeeID'] == employee_id]
-
-        if employee_row.empty:
-            st.error("查無此人")
-            return
-
-        row_index = employee_row.index[0] + 2 # +2 for header and 1-based index
+        row_index = employee_row.index[0] + 2
 
         if st.session_state.mode == "Check-in":
             handle_check_in(employee_id, employee_row, row_index, client, cookies)
         else: # Check-out
             handle_check_out(employee_row, row_index, client)
+
+        # Clear selection after processing
+        st.session_state.selected_employee_id = None
+        st.session_state.search_term = ""
+
 
 def handle_check_in(employee_id, employee_row, row_index, client, cookies):
     check_in_time = employee_row['CheckInTime'].iloc[0]
@@ -164,12 +196,10 @@ def handle_check_in(employee_id, employee_row, row_index, client, cookies):
     name = employee_row['Name'].iloc[0]
     table_no = employee_row['TableNo'].iloc[0]
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    expires = datetime.now() + timedelta(hours=24)
-
 
     # Assuming 'CheckInTime' is the 4th column (D)
     update_cell(client, "Event_Check-in", "Sheet1", row_index, 4, timestamp)
-    cookies.set('event_checked_in', employee_id, expires=expires)
+    cookies['event_checked_in'] = employee_id
     st.success(f"報到成功！{name}，您的桌號在 {table_no}")
 
 
