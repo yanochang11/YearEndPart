@@ -4,7 +4,6 @@ from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 from datetime import datetime, time, timedelta
-from streamlit_cookies_manager import EncryptedCookieManager
 import pytz
 
 # --- Timezone Configuration ---
@@ -31,34 +30,22 @@ def get_gsheet():
     client = gspread.authorize(creds)
     return client
 
-def find_employee(client, sheet_name, worksheet_name, search_term):
-    """Finds an employee by EmployeeID or Name in the Google Sheet."""
+@st.cache_data(ttl=60)
+def get_data(_client, sheet_name, worksheet_name):
+    """Fetches the entire employee list and caches it."""
     try:
-        sheet = client.open(sheet_name).worksheet(worksheet_name)
-        headers = sheet.row_values(1) # Get headers to map data
-
-        # Search by EmployeeID first (Column 1)
-        id_cells = sheet.findall(search_term, in_column=1)
-        if id_cells:
-            row_data = sheet.row_values(id_cells[0].row)
-            employee_dict = dict(zip(headers, row_data))
-            return [{'row_index': id_cells[0].row, 'data': employee_dict}]
-
-        # If no ID match, search by Name (Column 2)
-        name_cells = sheet.findall(search_term, in_column=2)
-        if name_cells:
-            results = []
-            for cell in name_cells:
-                row_data = sheet.row_values(cell.row)
-                employee_dict = dict(zip(headers, row_data))
-                results.append({'row_index': cell.row, 'data': employee_dict})
-            return results
-
-        return [] # No matches found
-    except Exception as e:
-        st.error(f"查詢時發生錯誤 / An error occurred while searching: {e}")
-        return None
-
+        sheet = _client.open(sheet_name).worksheet(worksheet_name)
+        data = get_as_dataframe(sheet)
+        # Ensure 'EmployeeID' is string type for matching
+        if 'EmployeeID' in data.columns:
+            data['EmployeeID'] = data['EmployeeID'].astype(str)
+        return data
+    except gspread.exceptions.SpreadsheetNotFound:
+        st.error(f"Spreadsheet '{sheet_name}' not found. Please check configuration.")
+        return pd.DataFrame()
+    except gspread.exceptions.WorksheetNotFound:
+        st.error(f"Worksheet '{worksheet_name}' not found. Please check configuration.")
+        return pd.DataFrame()
 
 def update_cell(client, sheet_name, worksheet_name, row, col, value):
     """Updates a single cell in the Google Sheet."""
@@ -116,11 +103,6 @@ def main():
 
     st.set_page_config(page_title="Event Check-in/out System 尾牙報到系統", initial_sidebar_state="collapsed")
     st.title("Event Check-in/out System 尾牙報到系統")
-    cookies = EncryptedCookieManager(
-        password=st.secrets.cookies.password,
-    )
-    if not cookies.ready():
-        st.stop()
 
     # Initialize session state for user-specific data
     if 'authenticated' not in st.session_state:
@@ -168,86 +150,86 @@ def main():
         st.warning("報到尚未開始或已結束 / Not currently open for check-in/out.")
         return
 
-    # --- On-Demand Search Logic ---
+    # --- Hybrid Data Loading ---
+    with st.spinner("正在載入員工名單，請稍候... / Loading employee list..."):
+        df = get_data(client, GOOGLE_SHEET_NAME, WORKSHEET_NAME)
+
+    if df.empty:
+        st.error("無法載入員工名單，請洽詢工作人員 / Could not load employee list, please contact staff.")
+        return
+
+    # --- Search Logic (now uses cached DataFrame) ---
     st.session_state.search_term = st.text_input("請輸入您的員工編號或姓名 / Please enter your Employee ID or Name:", value=st.session_state.search_term).strip()
 
     if st.button("確認 / Confirm"):
-        # Reset state on new search
-        st.session_state.selected_employee = None
-        st.session_state.search_results = None
         if not st.session_state.search_term:
             st.error("請輸入您的員工編號或名字 / Please enter your Employee ID or Name")
-        else:
-            # Perform the on-demand search
-            results = find_employee(client, GOOGLE_SHEET_NAME, WORKSHEET_NAME, st.session_state.search_term)
-            if not results:
-                st.error("查無此人，請確認輸入是否正確，或洽詢工作人員 / User not found, please check your input or contact staff.")
-            elif len(results) == 1:
-                st.session_state.selected_employee = results[0]
-            else: # Multiple matches
+            return
+
+        # Search by both EmployeeID and Name in the DataFrame
+        id_match = df[df['EmployeeID'] == st.session_state.search_term]
+        name_match = df[df['Name'] == st.session_state.search_term]
+
+        if not id_match.empty:
+            st.session_state.selected_employee_id = id_match['EmployeeID'].iloc[0]
+        elif not name_match.empty:
+            if len(name_match) == 1:
+                st.session_state.selected_employee_id = name_match['EmployeeID'].iloc[0]
+            else:
+                # Multiple matches found, prompt user to select
+                st.session_state.selected_employee_id = None # Clear previous selection
                 st.warning("找到多位同名員工，請選擇一位 / Multiple employees found with the same name, please select one:")
-                st.session_state.search_results = results
+                for index, row in name_match.iterrows():
+                    if st.button(f"{row['Name']} ({row['EmployeeID']})", key=row['EmployeeID']):
+                        st.session_state.selected_employee_id = row['EmployeeID']
+                        st.rerun() # Rerun to process the selection
+                return # Stop further processing until a selection is made
+        else:
+            st.error("查無此人，請確認輸入是否正確，或洽詢工作人員 / User not found, please check your input or contact staff.")
+            st.session_state.selected_employee_id = None
+            return
         st.rerun()
 
-    # --- Disambiguation for multiple results ---
-    if st.session_state.search_results:
-        for result in st.session_state.search_results:
-            emp = result['data']
-            if st.button(f"{emp['Name']} ({emp['EmployeeID']})", key=emp['EmployeeID']):
-                st.session_state.selected_employee = result
-                st.session_state.search_results = None
-                st.rerun() # Rerun to process the selection immediately
+    if st.session_state.get('selected_employee_id'):
+        employee_id = st.session_state.selected_employee_id
+        employee_row = df[df['EmployeeID'] == employee_id]
 
-    # --- Process the selected employee ---
-    if st.session_state.selected_employee:
-        employee_data = st.session_state.selected_employee['data']
-        row_index = st.session_state.selected_employee['row_index']
+        if not employee_row.empty:
+            row_index = employee_row.index[0] + 2 # +2 to account for header and 0-based index
 
-        st.info(f"正在為 {employee_data['Name']} ({employee_data['EmployeeID']}) 進行操作 / Processing for {employee_data['Name']} ({employee_data['EmployeeID']})")
+            if settings['mode'] == "Check-in":
+                handle_check_in(employee_row, row_index, client)
+            else: # Check-out
+                handle_check_out(employee_row, row_index, client)
 
-        if settings['mode'] == "Check-in":
-            handle_check_in(employee_data, row_index, client, cookies)
-        else: # Check-out
-            handle_check_out(employee_data, row_index, client)
-
-        # Clear state after processing and rerun to reset the interface
-        st.session_state.selected_employee = None
-        st.session_state.search_term = ""
-        st.session_state.search_results = None
-        st.rerun()
+            # Clear selection after processing
+            st.session_state.selected_employee_id = None
+            st.session_state.search_term = ""
+            st.rerun()
 
 
-def handle_check_in(employee_data, row_index, client, cookies):
-    # 1. Check if the device has already been used by checking for the cookie's existence.
-    if 'event_checked_in' in cookies:
-        st.warning("此裝置已完成報到，如需為他人報到，請使用其他裝置 / This device has already been used for check-in.")
-        return
-
-    # 2. Check the Google Sheet to see if this specific employee has already checked in.
-    check_in_time = employee_data.get('CheckInTime', '')
-    if check_in_time and str(check_in_time).strip(): # Check if not None and not empty
+def handle_check_in(employee_row, row_index, client):
+    # Check the DataFrame to see if this specific employee has already checked in.
+    check_in_time = employee_row['CheckInTime'].iloc[0]
+    if pd.notna(check_in_time) and str(check_in_time).strip() != '':
         st.warning("您已報到，無須重複操作 / You have already checked in.")
         return
 
     # 3. If all checks pass, proceed with the check-in process.
-    name = employee_data.get('Name')
-    table_no = employee_data.get('TableNo')
+    name = employee_row['Name'].iloc[0]
+    table_no = employee_row['TableNo'].iloc[0]
     tz = pytz.timezone(TIMEZONE)
     timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
 
     # Update the Google Sheet (Column 4 is CheckInTime)
     update_cell(client, "Event_Check-in", "Sheet1", row_index, 4, timestamp)
 
-    # Set the cookie to block further check-ins from this device.
-    cookies['event_checked_in'] = "true"
-    cookies.save()
-
     st.success(f"報到成功！歡迎 {name}，您的桌號在 {table_no} / Check-in successful! Welcome {name}, your table is {table_no}")
 
 
-def handle_check_out(employee_data, row_index, client):
-    check_out_time = employee_data.get('CheckOutTime', '')
-    if check_out_time and str(check_out_time).strip(): # Check if not None and not empty
+def handle_check_out(employee_row, row_index, client):
+    check_out_time = employee_row['CheckOutTime'].iloc[0]
+    if pd.notna(check_out_time) and str(check_out_time).strip() != '':
         st.warning("您已完成簽退 / You have already checked out.")
         return
 
