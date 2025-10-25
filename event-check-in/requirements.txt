@@ -4,3 +4,4 @@ pandas
 gspread-dataframe
 oauth2client
 pytz
+streamlit-cookies-manager
