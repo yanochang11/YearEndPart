@@ -4,6 +4,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 from datetime import datetime, time, timedelta
+from streamlit_cookies_manager import EncryptedCookieManager
 import pytz
 
 # --- Timezone Configuration ---
@@ -104,15 +105,21 @@ def main():
     st.set_page_config(page_title="Event Check-in/out System 尾牙報到系統", initial_sidebar_state="collapsed")
     st.title("Event Check-in/out System 尾牙報到系統")
 
+    cookies = EncryptedCookieManager(
+        password=st.secrets.cookies.password,
+    )
+    if not cookies.ready():
+        st.stop()
+
     # Initialize session state for user-specific data
     if 'authenticated' not in st.session_state:
         st.session_state.authenticated = False
     if 'search_term' not in st.session_state:
         st.session_state.search_term = ""
-    if 'search_results' not in st.session_state:
-        st.session_state.search_results = None
-    if 'selected_employee' not in st.session_state:
-        st.session_state.selected_employee = None
+    if 'selected_employee_id' not in st.session_state:
+        st.session_state.selected_employee_id = None
+    if 'feedback_message' not in st.session_state:
+        st.session_state.feedback_message = None
 
     GOOGLE_SHEET_NAME = "Event_Check-in"
     WORKSHEET_NAME = "Sheet1"
@@ -159,12 +166,27 @@ def main():
         return
 
     # --- Search Logic (now uses cached DataFrame) ---
+    # Display feedback message if it exists
+    if st.session_state.feedback_message:
+        message_type = st.session_state.feedback_message["type"]
+        message_text = st.session_state.feedback_message["text"]
+        if message_type == "success":
+            st.success(message_text)
+        elif message_type == "warning":
+            st.warning(message_text)
+        elif message_type == "error":
+            st.error(message_text)
+
     st.session_state.search_term = st.text_input("請輸入您的員工編號或姓名 / Please enter your Employee ID or Name:", value=st.session_state.search_term).strip()
 
     if st.button("確認 / Confirm"):
+        # Clear previous feedback and selection on a new search
+        st.session_state.feedback_message = None
+        st.session_state.selected_employee_id = None
+
         if not st.session_state.search_term:
-            st.error("請輸入您的員工編號或名字 / Please enter your Employee ID or Name")
-            return
+            st.session_state.feedback_message = {"type": "error", "text": "請輸入您的員工編號或名字 / Please enter your Employee ID or Name"}
+            st.rerun()
 
         # Search by both EmployeeID and Name in the DataFrame
         id_match = df[df['EmployeeID'] == st.session_state.search_term]
@@ -177,17 +199,15 @@ def main():
                 st.session_state.selected_employee_id = name_match['EmployeeID'].iloc[0]
             else:
                 # Multiple matches found, prompt user to select
-                st.session_state.selected_employee_id = None # Clear previous selection
-                st.warning("找到多位同名員工，請選擇一位 / Multiple employees found with the same name, please select one:")
+                st.session_state.feedback_message = {"type": "warning", "text": "找到多位同名員工，請選擇一位 / Multiple employees found with the same name, please select one:"}
                 for index, row in name_match.iterrows():
                     if st.button(f"{row['Name']} ({row['EmployeeID']})", key=row['EmployeeID']):
                         st.session_state.selected_employee_id = row['EmployeeID']
-                        st.rerun() # Rerun to process the selection
-                return # Stop further processing until a selection is made
+                        st.session_state.feedback_message = None # Clear warning after selection
+                        st.rerun()
+                return
         else:
-            st.error("查無此人，請確認輸入是否正確，或洽詢工作人員 / User not found, please check your input or contact staff.")
-            st.session_state.selected_employee_id = None
-            return
+            st.session_state.feedback_message = {"type": "error", "text": "查無此人，請確認輸入是否正確，或洽詢工作人員 / User not found, please check your input or contact staff."}
         st.rerun()
 
     if st.session_state.get('selected_employee_id'):
@@ -195,49 +215,52 @@ def main():
         employee_row = df[df['EmployeeID'] == employee_id]
 
         if not employee_row.empty:
-            row_index = employee_row.index[0] + 2 # +2 to account for header and 0-based index
+            row_index = employee_row.index[0] + 2
 
             if settings['mode'] == "Check-in":
-                handle_check_in(employee_row, row_index, client)
+                handle_check_in(employee_row, row_index, client, cookies)
             else: # Check-out
                 handle_check_out(employee_row, row_index, client)
 
-            # Clear selection after processing
+            # Clear selection and search term, but keep the feedback message
             st.session_state.selected_employee_id = None
             st.session_state.search_term = ""
             st.rerun()
 
 
-def handle_check_in(employee_row, row_index, client):
-    # Check the DataFrame to see if this specific employee has already checked in.
-    check_in_time = employee_row['CheckInTime'].iloc[0]
-    if pd.notna(check_in_time) and str(check_in_time).strip() != '':
-        st.warning("您已報到，無須重複操作 / You have already checked in.")
+def handle_check_in(employee_row, row_index, client, cookies):
+    if 'event_checked_in' in cookies:
+        st.session_state.feedback_message = {"type": "warning", "text": "此裝置已完成報到，如需為他人報到，請使用其他裝置 / This device has already been used for check-in."}
         return
 
-    # 3. If all checks pass, proceed with the check-in process.
+    check_in_time = employee_row['CheckInTime'].iloc[0]
+    if pd.notna(check_in_time) and str(check_in_time).strip() != '':
+        st.session_state.feedback_message = {"type": "warning", "text": "您已報到，無須重複操作 / You have already checked in."}
+        return
+
     name = employee_row['Name'].iloc[0]
     table_no = employee_row['TableNo'].iloc[0]
     tz = pytz.timezone(TIMEZONE)
     timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
 
-    # Update the Google Sheet (Column 4 is CheckInTime)
     update_cell(client, "Event_Check-in", "Sheet1", row_index, 4, timestamp)
 
-    st.success(f"報到成功！歡迎 {name}，您的桌號在 {table_no} / Check-in successful! Welcome {name}, your table is {table_no}")
+    cookies['event_checked_in'] = "true"
+    cookies.save()
+
+    st.session_state.feedback_message = {"type": "success", "text": f"報到成功！歡迎 {name}，您的桌號在 {table_no} / Check-in successful! Welcome {name}, your table is {table_no}"}
 
 
 def handle_check_out(employee_row, row_index, client):
     check_out_time = employee_row['CheckOutTime'].iloc[0]
     if pd.notna(check_out_time) and str(check_out_time).strip() != '':
-        st.warning("您已完成簽退 / You have already checked out.")
+        st.session_state.feedback_message = {"type": "warning", "text": "您已完成簽退 / You have already checked out."}
         return
 
     tz = pytz.timezone(TIMEZONE)
     timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
-    # Update the Google Sheet (Column 5 is CheckOutTime)
     update_cell(client, "Event_Check-in", "Sheet1", row_index, 5, timestamp)
-    st.success("簽退成功，祝您有個美好的一天！ / Check-out successful, have a nice day!")
+    st.session_state.feedback_message = {"type": "success", "text": "簽退成功，祝您有個美好的一天！ / Check-out successful, have a nice day!"}
 
 
 if __name__ == "__main__":
