@@ -103,7 +103,7 @@ def main():
         return
 
     st.set_page_config(page_title="Event Check-in/out System", initial_sidebar_state="collapsed")
-    st.title("Event Check-in/out System 尾牙報到系統")
+    st.title("Event Check-in/out System")
 
     cookies = EncryptedCookieManager(
         password=st.secrets.cookies.password,
