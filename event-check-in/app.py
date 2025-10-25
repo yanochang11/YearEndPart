@@ -102,7 +102,7 @@ def main():
         print("---")
         return
 
-    st.set_page_config(page_title="Event Check-in/out System 尾牙報到系統", initial_sidebar_state="collapsed")
+    st.set_page_config(page_title="Event Check-in/out System", initial_sidebar_state="collapsed")
     st.title("Event Check-in/out System 尾牙報到系統")
 
     cookies = EncryptedCookieManager(
@@ -230,7 +230,7 @@ def main():
 
 def handle_check_in(employee_row, row_index, client, cookies):
     if 'event_checked_in' in cookies:
-        st.session_state.feedback_message = {"type": "warning", "text": "此裝置已完成報到，如需為他人報到，請使用其他裝置 / This device has already been used for check-in."}
+        st.session_state.feedback_message = {"type": "warning", "text": "此裝置已完成報到 / This device has already been used for check-in."}
         return
 
     check_in_time = employee_row['CheckInTime'].iloc[0]
