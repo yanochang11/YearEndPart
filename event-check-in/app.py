@@ -13,7 +13,7 @@ TIMEZONE = "Asia/Taipei"
 # --- Google Sheets Connection ---
 @st.cache_resource(ttl=600)
 def get_gsheet():
-    # ... (rest of the function is the same)
+    """Establishes a connection to the Google Sheet using cached credentials."""
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds_dict = {
         "type": st.secrets.gcp_service_account.type,
@@ -33,11 +33,10 @@ def get_gsheet():
 
 @st.cache_data(ttl=60)
 def get_data(_client, sheet_name, worksheet_name):
-    """Fetches the entire employee list and caches it."""
+    """Fetches the entire employee list and caches it for 60 seconds."""
     try:
         sheet = _client.open(sheet_name).worksheet(worksheet_name)
         data = get_as_dataframe(sheet)
-        # Ensure 'EmployeeID' is string type for matching
         if 'EmployeeID' in data.columns:
             data['EmployeeID'] = data['EmployeeID'].astype(str)
         return data
@@ -49,23 +48,21 @@ def get_data(_client, sheet_name, worksheet_name):
         return pd.DataFrame()
 
 def update_cell(client, sheet_name, worksheet_name, row, col, value):
-    """Updates a single cell in the Google Sheet."""
+    """Updates a single cell in the Google Sheet and clears relevant caches."""
     if st.session_state.get('mock_mode', False):
         st.info("Mock mode: Simulating a successful update.")
         return
-
     try:
         sheet = client.open(sheet_name).worksheet(worksheet_name)
         sheet.update_cell(row, col, value)
-        # Clear the cache to reflect the update
-        get_data.clear()
+        get_data.clear() # Clear data cache to reflect the update
     except Exception as e:
         st.error(f"Failed to update Google Sheet: {e}")
 
 # --- Settings Management ---
 @st.cache_data(ttl=60)
 def get_settings(_client, sheet_name):
-    """Fetches settings from the 'Settings' worksheet."""
+    """Fetches settings from the 'Settings' worksheet and caches them."""
     try:
         settings_sheet = _client.open(sheet_name).worksheet("Settings")
         mode = settings_sheet.acell('A2').value
@@ -86,43 +83,27 @@ def save_settings(client, sheet_name, mode, start_time, end_time):
     try:
         settings_sheet = client.open(sheet_name).worksheet("Settings")
         settings_sheet.update('A2:C2', [[mode, start_time.strftime('%H:%M'), end_time.strftime('%H:%M')]])
-        get_settings.clear() # Clear cache after saving
+        get_settings.clear() # Clear settings cache after saving
         st.success("設定已儲存 / Settings saved successfully!")
     except Exception as e:
         st.error(f"儲存設定失敗 / Failed to save settings: {e}")
 
-
-# --- Main App ---
 def main():
-    if not st.runtime.exists():
-        print("---")
-        print("This app must be run with `streamlit run`.")
-        print("Please run `streamlit run app.py` to view this application.")
-        print("---")
-        return
-
+    """Main function to run the Streamlit application."""
     st.set_page_config(page_title="Event Check-in/out System", initial_sidebar_state="collapsed")
     st.title("Event Check-in/out System")
 
-    # --- Device Fingerprint Handling (Runs on every interaction) ---
+    # --- Device Fingerprint Handling ---
     if 'device_fingerprint' not in st.session_state:
         st.session_state.device_fingerprint = ""
 
-    # This hidden input will be populated by the JavaScript below
+    # Hidden input field that will be populated by our JavaScript
     st.text_input("Device Fingerprint", key="device_fingerprint_hidden", label_visibility="hidden",
                   placeholder="__fingerprint_placeholder__")
 
-    # CSS to hide the input field
-    st.markdown("""
-        <style>
-        input[placeholder="__fingerprint_placeholder__"] {
-            display: none;
-        }
-        </style>
-    """, unsafe_allow_html=True)
+    st.markdown("""<style>input[placeholder="__fingerprint_placeholder__"] { display: none; }</style>""", unsafe_allow_html=True)
 
     # JavaScript to get the fingerprint and update the hidden Streamlit input
-    # ** MODIFIED: Re-introduced polling for stability **
     js_code = '''
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
     <script>
@@ -143,13 +124,14 @@ def main():
                 if (input) {
                     if(input.value === "") {
                         input.value = visitorId;
+                        // Dispatch event to notify Streamlit of the change
                         const event = new Event('input', { bubbles: true });
                         input.dispatchEvent(event);
                         console.log('Fingerprint set successfully.');
                     }
-                    clearInterval(intervalId);
+                    clearInterval(intervalId); // Stop polling once successful
                 } else if (attempts >= maxAttempts) {
-                    clearInterval(intervalId);
+                    clearInterval(intervalId); // Stop polling after timeout
                     console.error('Failed to find the fingerprint input field.');
                 }
             }, 100); // Check every 100ms
@@ -161,32 +143,25 @@ def main():
     '''
     components.html(js_code, height=0)
 
-    # Copy the value from the hidden input to a more accessible session_state variable
-    # This ensures the rest of the app can react to the JS-driven change
-    if st.session_state.device_fingerprint_hidden:
+    # **CRITICAL FIX**: This logic syncs the state from JS to Python and forces a rerun
+    if st.session_state.device_fingerprint_hidden and not st.session_state.device_fingerprint:
         st.session_state.device_fingerprint = st.session_state.device_fingerprint_hidden
-
+        st.rerun()
 
     # --- Main App Logic ---
-    if 'authenticated' not in st.session_state:
-        st.session_state.authenticated = False
-    if 'search_term' not in st.session_state:
-        st.session_state.search_term = ""
-    if 'selected_employee_id' not in st.session_state:
-        st.session_state.selected_employee_id = None
-    if 'feedback_message' not in st.session_state:
-        st.session_state.feedback_message = None
+    if 'authenticated' not in st.session_state: st.session_state.authenticated = False
+    if 'search_term' not in st.session_state: st.session_state.search_term = ""
+    if 'selected_employee_id' not in st.session_state: st.session_state.selected_employee_id = None
+    if 'feedback_message' not in st.session_state: st.session_state.feedback_message = None
 
     GOOGLE_SHEET_NAME = "Event_Check-in"
     WORKSHEET_NAME = "Sheet1"
 
     client = get_gsheet()
     settings = get_settings(client, GOOGLE_SHEET_NAME)
-
     st.markdown(f"**目前模式 / Current Mode:** `{settings['mode']}`")
 
     with st.sidebar.expander("管理員面板 / Admin Panel", expanded=False):
-        # Admin Panel Logic remains the same...
         if not st.session_state.authenticated:
             password = st.text_input("請輸入密碼 / Enter password:", type="password", key="password_input")
             if st.button("登入 / Login"):
@@ -231,7 +206,6 @@ def main():
     if not st.session_state.get('selected_employee_id'):
         st.session_state.search_term = st.text_input("請輸入您的員工編號或姓名 / Please enter your Employee ID or Name:", value=st.session_state.search_term).strip()
         if st.button("確認 / Confirm"):
-            # ... Search logic remains the same ...
             if not st.session_state.search_term:
                 st.session_state.feedback_message = {"type": "error", "text": "請輸入您的員工編號或名字 / Please enter your Employee ID or Name"}
             else:
@@ -252,7 +226,6 @@ def main():
                 else:
                     st.session_state.feedback_message = {"type": "error", "text": "查無此人，請確認輸入是否正確，或洽詢工作人員 / User not found, please check your input or contact staff."}
             st.rerun()
-
     else: # An employee has been selected
         employee_id = st.session_state.selected_employee_id
         employee_row = df[df['EmployeeID'] == employee_id]
@@ -260,12 +233,11 @@ def main():
             row_index = employee_row.index[0] + 2
             if settings['mode'] == "Check-in":
                 handle_check_in(df, employee_row, row_index, client)
-            else: # Check-out
+            else:
                 handle_check_out(employee_row, row_index, client)
 
-
 def handle_check_in(df, employee_row, row_index, client):
-    # Check if already checked in
+    """Handles the check-in process for a selected employee."""
     check_in_time = employee_row['CheckInTime'].iloc[0]
     if pd.notna(check_in_time) and str(check_in_time).strip() != '':
         st.session_state.feedback_message = {"type": "warning", "text": "您已報到，無須重複操作 / You have already checked in."}
@@ -280,37 +252,31 @@ def handle_check_in(df, employee_row, row_index, client):
 
     fingerprint = st.session_state.get('device_fingerprint')
 
-    # If fingerprint is not available yet, show a loading state and instruct user to wait.
     if not fingerprint:
         st.text_input("設備識別碼 / Device Fingerprint", "正在獲取中... / Acquiring...", disabled=True)
-        st.warning("正在識別您的裝置，請稍候幾秒，識別碼將會自動出現 / Identifying your device, please wait a few seconds and the ID will appear automatically.")
-        st.stop() # Stop further execution until the next rerun
-    else:
-        st.text_input("設備識別碼 / Device Fingerprint", value=fingerprint, disabled=True)
+        st.warning("正在識別您的裝置，請稍候... / Identifying your device, please wait...")
+        return # Exit this run, the rerun in main() will eventually provide the fingerprint
 
+    # If we are here, the fingerprint is available
+    st.text_input("設備識別碼 / Device Fingerprint", value=fingerprint, disabled=True)
 
     if st.button("確認報到 / Confirm Check-in"):
-        # Double check for duplicate fingerprint before writing to sheet
         if 'DeviceFingerprint' in df.columns and not df[df['DeviceFingerprint'] == fingerprint].empty:
             st.session_state.feedback_message = {"type": "error", "text": "此裝置已完成報到 / This device has already been used for check-in."}
         else:
             table_no = employee_row['TableNo'].iloc[0]
             tz = pytz.timezone(TIMEZONE)
             timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
-
-            update_cell(client, "Event_Check-in", "Sheet1", row_index, 4, timestamp) # Update CheckInTime
-            update_cell(client, "Event_Check-in", "Sheet1", row_index, 6, fingerprint) # Update DeviceFingerprint
-
+            update_cell(client, "Event_Check-in", "Sheet1", row_index, 4, timestamp)
+            update_cell(client, "Event_Check-in", "Sheet1", row_index, 6, fingerprint)
             st.session_state.feedback_message = {"type": "success", "text": f"報到成功！歡迎 {name}，您的桌號在 {table_no} / Check-in successful! Welcome {name}, your table is {table_no}"}
 
-        # Reset for the next user
         st.session_state.selected_employee_id = None
         st.session_state.search_term = ""
         st.rerun()
 
-
 def handle_check_out(employee_row, row_index, client):
-    # ... Check-out logic remains the same ...
+    """Handles the check-out process for a selected employee."""
     check_out_time = employee_row['CheckOutTime'].iloc[0]
     if pd.notna(check_out_time) and str(check_out_time).strip() != '':
         st.session_state.feedback_message = {"type": "warning", "text": "您已完成簽退 / You have already checked out."}
@@ -320,11 +286,9 @@ def handle_check_out(employee_row, row_index, client):
         update_cell(client, "Event_Check-in", "Sheet1", row_index, 5, timestamp)
         st.session_state.feedback_message = {"type": "success", "text": "簽退成功，祝您有個美好的一天！ / Check-out successful, have a nice day!"}
 
-    # Reset for the next user
     st.session_state.selected_employee_id = None
     st.session_state.search_term = ""
     st.rerun()
-
 
 if __name__ == "__main__":
     main()
