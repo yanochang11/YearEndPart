@@ -19,7 +19,8 @@ def get_gsheet():
         "type": st.secrets.gcp_service_account.type,
         "project_id": st.secrets.gcp_service_account.project_id,
         "private_key_id": st.secrets.gcp_service_account.private_key_id,
-        "private_key": st.secrets.ggcp_service_account.private_key,
+        # 【CORRECTION】: Changed "ggcp_service_account" to "gcp_service_account"
+        "private_key": st.secrets.gcp_service_account.private_key,
         "client_email": st.secrets.gcp_service_account.client_email,
         "client_id": st.secrets.gcp_service_account.client_id,
         "auth_uri": st.secrets.gcp_service_account.auth_uri,
@@ -94,17 +95,17 @@ def main():
     st.title("Event Check-in/out System")
 
     # --- Device Fingerprint Handling ---
-    # 穩定儲存識別碼的狀態變數
+    # Stable state variable to store the fingerprint
     if 'device_fingerprint' not in st.session_state:
         st.session_state.device_fingerprint = ""
 
-    # 用於接收 JS 值的隱藏元件
+    # Hidden component to receive the value from JS
     st.text_input("Device Fingerprint", key="device_fingerprint_hidden", label_visibility="hidden",
                   placeholder="__fingerprint_placeholder__")
 
     st.markdown("""<style>input[placeholder="__fingerprint_placeholder__"] { display: none; }</style>""", unsafe_allow_html=True)
 
-    # JavaScript 程式碼，功能不變
+    # JavaScript code, unchanged
     js_code = '''
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
     <script>
@@ -141,9 +142,9 @@ def main():
     '''
     components.html(js_code, height=0)
 
-    # 【關鍵修正 1】: 這是解決所有問題的核心。
-    # 如果我們穩定的狀態變數是空的，但前端的隱藏元件已經有值了，
-    # 就把值同步過來，並觸發一次絕對必要的刷新。
+    # This is the core logic that solves the sync issue.
+    # If our stable state is empty but the hidden component has received a value,
+    # we sync it and trigger one essential rerun.
     if not st.session_state.device_fingerprint and st.session_state.device_fingerprint_hidden:
         st.session_state.device_fingerprint = st.session_state.device_fingerprint_hidden
         st.rerun()
@@ -243,7 +244,7 @@ def handle_check_in(df, employee_row, row_index, client):
         st.session_state.feedback_message = {"type": "warning", "text": "您已報到，無須重複操作 / You have already checked in."}
         st.session_state.selected_employee_id = None
         st.session_state.search_term = ""
-        st.session_state.device_fingerprint = "" # 為下一位使用者重設
+        st.session_state.device_fingerprint = "" # Reset for the next user
         st.rerun()
         return
 
@@ -251,7 +252,7 @@ def handle_check_in(df, employee_row, row_index, client):
     employee_id = employee_row['EmployeeID'].iloc[0]
     st.info(f"正在為 **{name}** ({employee_id}) 辦理報到手續。 / Processing check-in for **{name}** ({employee_id}).")
 
-    # 【關鍵修正 2】: 所有的邏輯，現在都只依賴我們穩定儲存的 'device_fingerprint' 狀態
+    # All logic now relies on our stable 'device_fingerprint' state
     fingerprint = st.session_state.get('device_fingerprint')
 
     if not fingerprint:
@@ -259,11 +260,11 @@ def handle_check_in(df, employee_row, row_index, client):
         st.warning("正在識別您的裝置，請稍候... / Identifying your device, please wait...")
         return
 
-    # 如果程式能執行到這裡，代表 fingerprint 已經成功獲取並被鎖定
+    # If the code reaches here, the fingerprint is acquired and locked in
     st.text_input("設備識別碼 / Device Fingerprint", value=fingerprint, disabled=True)
 
     if st.button("✅ 確認報到 / Confirm Check-in"):
-        # 按下按鈕時，我們使用的是 'fingerprint' 變數，它儲存的是穩定、不會遺失的值
+        # When the button is pressed, we use the 'fingerprint' variable, which holds the stable, non-lost value
         if 'DeviceFingerprint' in df.columns and not df[df['DeviceFingerprint'] == fingerprint].empty:
             st.session_state.feedback_message = {"type": "error", "text": "此裝置已完成報到 / This device has already been used for check-in."}
         else:
@@ -274,7 +275,7 @@ def handle_check_in(df, employee_row, row_index, client):
             update_cell(client, "Event_Check-in", "Sheet1", row_index, 6, fingerprint)
             st.session_state.feedback_message = {"type": "success", "text": f"報到成功！歡迎 {name}，您的桌號在 {table_no} / Check-in successful! Welcome {name}, your table is {table_no}"}
 
-        # 為下一位使用者重設所有相關狀態
+        # Reset all relevant states for the next user
         st.session_state.selected_employee_id = None
         st.session_state.search_term = ""
         st.session_state.device_fingerprint = ""
