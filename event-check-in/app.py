@@ -145,9 +145,6 @@ def main():
         fingerprint_from_query = st.query_params.get("fingerprint")
         if fingerprint_from_query and st.session_state.device_fingerprint is None:
             st.session_state.device_fingerprint = fingerprint_from_query
-            # Use st.rerun() to immediately clear the query param from the URL
-            # and ensure the app logic uses the fingerprint from session_state
-            st.rerun()
     except Exception as e:
         # st.query_params might not be available in all contexts
         pass
