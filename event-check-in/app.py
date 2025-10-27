@@ -25,7 +25,8 @@ def get_gsheet():
         "auth_uri": st.secrets.gcp_service_account.auth_uri,
         "token_uri": st.secrets.gcp_service_account.token_uri,
         "auth_provider_x509_cert_url": st.secrets.gcp_service_account.auth_provider_x509_cert_url,
-        "client_x509_cert_url": st.secrets.ggcp_service_account.client_x509_cert_url,
+        # 【CORRECTION】: Changed "ggcp_service_account" to "gcp_service_account"
+        "client_x509_cert_url": st.secrets.gcp_service_account.client_x509_cert_url,
     }
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
@@ -202,7 +203,7 @@ def main():
                 id_match = df[df['EmployeeID'] == st.session_state.search_term]
                 name_match = df[df['Name'] == st.session_state.search_term]
                 if not id_match.empty:
-                    st.session_state.selected__employee_id = id_match['EmployeeID'].iloc[0]
+                    st.session_state.selected_employee_id = id_match['EmployeeID'].iloc[0]
                 elif not name_match.empty:
                     if len(name_match) == 1:
                         st.session_state.selected_employee_id = name_match['EmployeeID'].iloc[0]
@@ -240,21 +241,21 @@ def handle_check_in(df, employee_row, row_index, client):
     employee_id = employee_row['EmployeeID'].iloc[0]
     st.info(f"正在為 **{name}** ({employee_id}) 辦理報到手續。 / Processing check-in for **{name}** ({employee_id}).")
 
-    # 【關鍵修正】: 直接從隱藏的 text_input 元件讀取狀態。這是最直接、最可靠的狀態來源。
+    # Directly read from the hidden text_input component's state. This is the most direct source of truth.
     fingerprint = st.session_state.get('device_fingerprint_hidden')
 
-    # 檢查讀取到的值是否有效
+    # Check if the retrieved value is valid
     if not fingerprint or fingerprint == "__fingerprint_placeholder__":
         st.text_input("設備識別碼 / Device Fingerprint", "正在獲取中... / Acquiring...", disabled=True)
         st.warning("正在識別您的裝置，請稍候... / Identifying your device, please wait...")
-        # 讓 Streamlit 自然地等待下一次由 JS input event 觸發的刷新
+        # Let Streamlit naturally wait for the next rerun triggered by the JS input event
         return
     
-    # 如果程式能執行到這裡，代表 fingerprint 已經成功獲取
+    # If the code reaches here, it means the fingerprint has been successfully acquired
     st.text_input("設備識別碼 / Device Fingerprint", value=fingerprint, disabled=True)
 
     if st.button("✅ 確認報到 / Confirm Check-in"):
-        # 按下按鈕時，再次從最可靠的來源讀取一次，確保萬無一失
+        # When the button is pressed, read from the most reliable source one more time to be safe
         final_fingerprint = st.session_state.get('device_fingerprint_hidden')
         if 'DeviceFingerprint' in df.columns and not df[df['DeviceFingerprint'] == final_fingerprint].empty:
             st.session_state.feedback_message = {"type": "error", "text": "此裝置已完成報到 / This device has already been used for check-in."}
@@ -266,10 +267,10 @@ def handle_check_in(df, employee_row, row_index, client):
             update_cell(client, "Event_Check-in", "Sheet1", row_index, 6, final_fingerprint)
             st.session_state.feedback_message = {"type": "success", "text": f"報到成功！歡迎 {name}，您的桌號在 {table_no} / Check-in successful! Welcome {name}, your table is {table_no}"}
 
-        # 重設狀態，準備給下一位使用者
+        # Reset state for the next user
         st.session_state.selected_employee_id = None
         st.session_state.search_term = ""
-        # 這裡不需要清除 fingerprint 狀態，因為下一個人進來時，JS 會用新的值覆蓋它
+        # There's no need to clear the fingerprint state, as the JS will overwrite it for the next user
         st.rerun()
 
 def handle_check_out(employee_row, row_index, client):
