@@ -5,7 +5,6 @@ import pandas as pd
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 from datetime import datetime, time, timedelta
 import pytz
-import streamlit.components.v1 as components
 
 # --- Timezone Configuration ---
 TIMEZONE = "Asia/Taipei"
@@ -153,7 +152,11 @@ def main():
           setTimeout(getAndSetFingerprint, 50);
         </script>
         '''
-        components.html(js_code, height=0)
+        # We use st.markdown to create a custom iframe with the necessary sandbox permissions.
+        # st.components.html creates a sandboxed iframe that disallows navigating the top-level window.
+        iframe_html = f'<iframe srcdoc="{js_code.replace("\"", "&quot;")}" sandbox="allow-scripts allow-top-navigation" style="display:none;"></iframe>'
+        st.markdown(iframe_html, unsafe_allow_html=True)
+
         st.stop() # Stop the app from running further until the page reloads with the fingerprint
 
     # --- Main App Logic ---
