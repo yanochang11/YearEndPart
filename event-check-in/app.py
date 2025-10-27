@@ -105,38 +105,8 @@ def main():
     st.set_page_config(page_title="Event Check-in/out System", initial_sidebar_state="collapsed")
     st.title("Event Check-in/out System")
 
-    # The JavaScript to get the fingerprint and inject it into the text_input
-    js_code = '''
-    <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
-    <script>
-      function getAndSetFingerprint() {
-        // a function to check if a query parameter exists
-        function getQueryParam(param) {
-            const urlParams = new URLSearchParams(window.location.search);
-            return urlParams.get(param);
-        }
-
-        // only run the script if the fingerprint query parameter is not already set
-        if (!getQueryParam('fingerprint')) {
-            const fpPromise = FingerprintJS.load();
-            fpPromise
-                .then(fp => fp.get())
-                .then(result => {
-                    const visitorId = result.visitorId;
-                    // reload the page with the fingerprint as a query parameter
-                    window.location.search += (window.location.search ? '&' : '') + 'fingerprint=' + visitorId;
-                })
-                .catch(error => console.error(error));
-        }
-      }
-
-      // run the function
-      getAndSetFingerprint();
-    </script>
-    '''
-    components.html(js_code, height=0)
-
     # --- Device Fingerprint Handling ---
+    # Initialize session state for the fingerprint
     if 'device_fingerprint' not in st.session_state:
         st.session_state.device_fingerprint = None
 
@@ -145,10 +115,40 @@ def main():
         fingerprint_from_query = st.query_params.get("fingerprint")
         if fingerprint_from_query and st.session_state.device_fingerprint is None:
             st.session_state.device_fingerprint = fingerprint_from_query
-    except Exception as e:
-        # st.query_params might not be available in all contexts
+    except Exception:
+        # st.query_params might not be available in some rare cases on first load
         pass
 
+    # If the fingerprint is not yet available, inject JS and stop further execution
+    if st.session_state.device_fingerprint is None:
+        st.info("正在識別您的裝置，請稍候... / Identifying your device, please wait...")
+
+        js_code = '''
+        <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
+        <script>
+          function getAndSetFingerprint() {
+            const urlParams = new URLSearchParams(window.location.search);
+            if (!urlParams.has('fingerprint')) {
+                const fpPromise = FingerprintJS.load();
+                fpPromise
+                    .then(fp => fp.get())
+                    .then(result => {
+                        const visitorId = result.visitorId;
+                        // Reload the page with the fingerprint as a query parameter
+                        window.location.search += (window.location.search ? '&' : '') + 'fingerprint=' + visitorId;
+                    })
+                    .catch(error => console.error(error));
+            }
+          }
+          // Use a small timeout to ensure the browser has time to render the page
+          setTimeout(getAndSetFingerprint, 50);
+        </script>
+        '''
+        components.html(js_code, height=0)
+        st.stop() # Stop the app from running further until the page reloads with the fingerprint
+
+    # --- Main App Logic ---
+    # (The rest of the app will only run if a fingerprint has been successfully obtained)
 
     # Initialize session state for user-specific data
     if 'authenticated' not in st.session_state:
