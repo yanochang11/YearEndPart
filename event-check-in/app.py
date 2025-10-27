@@ -118,7 +118,6 @@ def main():
     """Main function to run the Streamlit application."""
     st.set_page_config(page_title="Event Check-in/out System", initial_sidebar_state="collapsed")
 
-    # --- Robust Device Fingerprint Logic ---
     if 'device_fingerprint' not in st.session_state:
         st.session_state.device_fingerprint = None
 
@@ -138,7 +137,6 @@ def main():
 
     st.title("Event Check-in/out System")
 
-    # --- Main Application Logic ---
     if 'authenticated' not in st.session_state: st.session_state.authenticated = False
     if 'search_term' not in st.session_state: st.session_state.search_term = ""
     if 'selected_employee_id' not in st.session_state: st.session_state.selected_employee_id = None
@@ -243,17 +241,21 @@ def handle_check_in(df, employee_row, row_index, client):
     st.text_input("設備識別碼 / Device Fingerprint", value=fingerprint, disabled=True, help="此為瀏覽器識別碼，用於防止重複報到 / This is a browser identifier to prevent duplicate check-ins.")
 
     if st.button("✅ 確認報到 / Confirm Check-in"):
-        fresh_df = get_data(client, "Event_Check-in", "Sheet1")
-        if 'DeviceFingerprint' in fresh_df.columns and not fresh_df[fresh_df['DeviceFingerprint'] == fingerprint].empty:
-            st.session_state.feedback_message = {"type": "error", "text": "此裝置已完成報到 / This device has already been used for check-in."}
-        else:
-            table_no = employee_row['TableNo'].iloc[0]
-            tz = pytz.timezone(TIMEZONE)
-            timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+        # 增加保護，確保 fingerprint 是字串
+        if isinstance(fingerprint, str):
+            fresh_df = get_data(client, "Event_Check-in", "Sheet1")
+            if 'DeviceFingerprint' in fresh_df.columns and not fresh_df[fresh_df['DeviceFingerprint'] == fingerprint].empty:
+                st.session_state.feedback_message = {"type": "error", "text": "此裝置已完成報到 / This device has already been used for check-in."}
+            else:
+                table_no = employee_row['TableNo'].iloc[0]
+                tz = pytz.timezone(TIMEZONE)
+                timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
 
-            update_cell(client, "Event_Check-in", "Sheet1", row_index, 4, timestamp)
-            update_cell(client, "Event_Check-in", "Sheet1", row_index, 6, fingerprint)
-            st.session_state.feedback_message = {"type": "success", "text": f"報到成功！歡迎 {name}，您的桌號在 {table_no} / Check-in successful! Welcome {name}, your table is {table_no}"}
+                update_cell(client, "Event_Check-in", "Sheet1", row_index, 4, timestamp)
+                update_cell(client, "Event_Check-in", "Sheet1", row_index, 6, fingerprint)
+                st.session_state.feedback_message = {"type": "success", "text": f"報到成功！歡迎 {name}，您的桌號在 {table_no} / Check-in successful! Welcome {name}, your table is {table_no}"}
+        else:
+            st.session_state.feedback_message = {"type": "error", "text": "無法驗證裝置，請重新整理頁面 / Could not verify device, please refresh the page."}
 
         st.session_state.selected_employee_id = None
         st.session_state.search_term = ""
