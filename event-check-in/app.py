@@ -142,13 +142,13 @@ def main():
     components.html(js_code, height=0)
 
     # 步驟 4: 【解決問題的核心】
-    # 檢查我們穩定的狀態變數是否為空。如果是，再檢查前端傳來的值是否已經存在且不是預設值。
-    # 如果是，就進行一次性的狀態「鎖定」，並強制刷新頁面，確保整個應用程式進入下一個正確的狀態。
+    # 檢查我們穩定的狀態變數是否為空，且前端傳來的值是否已經存在且不是預設值。
+    # 如果是，就進行一次性的狀態「鎖定」，但不再這裡呼叫 st.rerun()。
+    # 使用者的下一個操作（例如點擊按鈕）會自然觸發刷新，到那時這個值就會被鎖定，且不會打斷使用者的操作流程。
     if (not st.session_state.device_fingerprint and
             st.session_state.device_fingerprint_hidden and
             st.session_state.device_fingerprint_hidden != "__fingerprint_placeholder__"):
         st.session_state.device_fingerprint = st.session_state.device_fingerprint_hidden
-        st.rerun()
 
     # --- Main App Logic ---
     if 'authenticated' not in st.session_state: st.session_state.authenticated = False
