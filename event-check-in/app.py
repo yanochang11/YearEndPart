@@ -20,7 +20,7 @@ def get_gsheet():
         "type": st.secrets.gcp_service_account.type,
         "project_id": st.secrets.gcp_service_account.project_id,
         "private_key_id": st.secrets.gcp_service_account.private_key_id,
-        "private_key": st.secrets.gcp_service_account.private_key, # Corrected typo here
+        "private_key": st.secrets.gcp_service_account.private_key,
         "client_email": st.secrets.gcp_service_account.client_email,
         "client_id": st.secrets.gcp_service_account.client_id,
         "auth_uri": st.secrets.gcp_service_account.auth_uri,
@@ -119,9 +119,12 @@ def main():
     """
     component_value = components.html(js_code, height=0, key="fingerprint_getter")
 
+    # Passively update the state. Let Streamlit's natural rerun handle the UI update.
+    # This avoids the forceful rerun that was causing the TypeError.
     if isinstance(component_value, dict) and "fingerprint" in component_value:
         if st.session_state.device_fingerprint is None:
             st.session_state.device_fingerprint = component_value["fingerprint"]
+            # A single, gentle rerun is safe here ONLY when the value is first set.
             st.rerun()
 
     st.title("Event Check-in/out System")
