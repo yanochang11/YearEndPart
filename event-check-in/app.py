@@ -14,7 +14,7 @@ TIMEZONE = "Asia/Taipei"
 @st.cache_resource(ttl=600)
 def get_gsheet():
     """Establishes a connection to the Google Sheet using cached credentials."""
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    scope = ["https.spreadsheets.google.com/feeds", "https.googleapis.com/auth/drive"]
     creds_dict = {
         "type": st.secrets.gcp_service_account.type,
         "project_id": st.secrets.gcp_service_account.project_id,
@@ -39,7 +39,6 @@ def get_data(_client, sheet_name, worksheet_name):
         data = get_as_dataframe(sheet)
         if 'EmployeeID' in data.columns:
             data['EmployeeID'] = data['EmployeeID'].astype(str)
-        # Ensure DeviceFingerprint column exists and is string type for comparison
         if 'DeviceFingerprint' in data.columns:
             data['DeviceFingerprint'] = data['DeviceFingerprint'].astype(str)
         return data
@@ -85,55 +84,58 @@ def save_settings(client, sheet_name, mode, start_time, end_time):
     except Exception as e:
         st.error(f"儲存設定失敗 / Failed to save settings: {e}")
 
-def get_fingerprint():
+def get_fingerprint_component():
     """
-    Renders a JavaScript component to get the device fingerprint.
-    Returns the fingerprint string once available, otherwise None.
+    Renders a robust JavaScript component to get the device fingerprint.
+    This version includes a global flag to prevent re-execution.
     """
     js_code = """
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
     <script>
-      async function getVisitorId() {
-        try {
+      // Use a flag on the window object to ensure this logic runs only once per page load.
+      if (!window.fingerprintPromise) {
+        window.fingerprintPromise = new Promise(async (resolve, reject) => {
+          try {
             const fp = await FingerprintJS.load();
             const result = await fp.get();
-            const visitorId = result.visitorId;
-            // Send the result back to Streamlit
-            Streamlit.setComponentValue(visitorId);
-        } catch (error) {
-            console.error("FingerprintJS error:", error);
-            // Send an error status back to Streamlit
-            Streamlit.setComponentValue("error");
-        }
+            resolve(result.visitorId);
+          } catch (error) {
+            reject(error);
+          }
+        });
       }
-      // Execute the function
-      getVisitorId();
+
+      // Send the result back to Streamlit once the promise is resolved.
+      window.fingerprintPromise.then(visitorId => {
+        Streamlit.setComponentValue(visitorId);
+      }).catch(error => {
+        console.error("FingerprintJS error:", error);
+        Streamlit.setComponentValue("error");
+      });
     </script>
     """
-    component_value = components.html(js_code, height=0, key="fingerprint_getter")
-    return component_value
+    return components.html(js_code, height=0, key="fingerprint_component")
 
 def main():
     """Main function to run the Streamlit application."""
     st.set_page_config(page_title="Event Check-in/out System", initial_sidebar_state="collapsed")
 
-    # --- Stable Device Fingerprint Logic ---
+    # --- Robust Device Fingerprint Logic ---
     if 'device_fingerprint' not in st.session_state:
         st.session_state.device_fingerprint = None
 
     if st.session_state.device_fingerprint is None:
-        fingerprint = get_fingerprint()
-        if fingerprint: # If the component returns a value
+        fingerprint = get_fingerprint_component()
+        if fingerprint:
             st.session_state.device_fingerprint = fingerprint
-            st.rerun() # Rerun the script to proceed with the main app
-        else: # If component has not returned a value yet
+            st.rerun()
+        else:
             st.info("🔄 正在初始化報到系統，請稍候...")
             st.info("🔄 Initializing the check-in system, please wait...")
-            return # Halt execution until the fingerprint is available
+            return
 
     if st.session_state.device_fingerprint == "error":
         st.error("無法取得裝置識別碼，請重新整理頁面或聯繫工作人員。")
-        st.error("Could not get device fingerprint. Please refresh the page or contact staff.")
         return
 
     st.title("Event Check-in/out System")
@@ -243,7 +245,6 @@ def handle_check_in(df, employee_row, row_index, client):
     st.text_input("設備識別碼 / Device Fingerprint", value=fingerprint, disabled=True, help="此為瀏覽器識別碼，用於防止重複報到 / This is a browser identifier to prevent duplicate check-ins.")
 
     if st.button("✅ 確認報到 / Confirm Check-in"):
-        # Re-fetch data just before the check to get the most up-to-date list
         fresh_df = get_data(client, "Event_Check-in", "Sheet1")
         if 'DeviceFingerprint' in fresh_df.columns and not fresh_df[fresh_df['DeviceFingerprint'] == fingerprint].empty:
             st.session_state.feedback_message = {"type": "error", "text": "此裝置已完成報到 / This device has already been used for check-in."}
@@ -251,10 +252,7 @@ def handle_check_in(df, employee_row, row_index, client):
             table_no = employee_row['TableNo'].iloc[0]
             tz = pytz.timezone(TIMEZONE)
             timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
-            
-            # Assuming 'DeviceFingerprint' is the 6th column (index 6)
-            # EmployeeID, Name, TableNo, CheckInTime, CheckOutTime, DeviceFingerprint
-            #  1         2      3        4            5             6
+
             update_cell(client, "Event_Check-in", "Sheet1", row_index, 4, timestamp)
             update_cell(client, "Event_Check-in", "Sheet1", row_index, 6, fingerprint)
             st.session_state.feedback_message = {"type": "success", "text": f"報到成功！歡迎 {name}，您的桌號在 {table_no} / Check-in successful! Welcome {name}, your table is {table_no}"}
