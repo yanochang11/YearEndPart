@@ -110,18 +110,19 @@ def main():
     if 'device_fingerprint' not in st.session_state:
         st.session_state.device_fingerprint = ""
 
-    # 2. Add a text input to receive the fingerprint, with a data_testid for targeting.
+    # 2. Add a hidden marker div and then the text input.
+    # We will use the adjacent sibling selector in CSS/JS to target the input.
+    st.markdown('<div id="fingerprint_marker"></div>', unsafe_allow_html=True)
     st.text_input(
         "Device Fingerprint",
         key="device_fingerprint",
-        label_visibility="hidden",
-        data_testid="device_fingerprint_input"  # Underscore is converted to hyphen in HTML
+        label_visibility="hidden"
     )
 
-    # 3. Inject CSS to hide the text input completely using its data-testid.
+    # 3. Inject CSS to hide the div that immediately follows our marker.
     st.markdown("""
         <style>
-        div[data-testid="device_fingerprint_input"] {
+        #fingerprint_marker + div {
             display: none;
         }
         </style>
@@ -139,8 +140,8 @@ def main():
             const visitorId = result.visitorId;
             console.log("Device Fingerprint:", visitorId);
 
-            // Find the input element in the parent document using the data-testid
-            const input = window.parent.document.querySelector('div[data-testid="device_fingerprint_input"] input');
+            // Find the div immediately following the marker in the parent document, then find the input inside it.
+            const input = window.parent.document.querySelector('#fingerprint_marker + div input');
 
             // Check if the input is found and its value is not already set
             if (input && input.value === "") {
