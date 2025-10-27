@@ -25,7 +25,7 @@ def get_gsheet():
         "auth_uri": st.secrets.gcp_service_account.auth_uri,
         "token_uri": st.secrets.gcp_service_account.token_uri,
         "auth_provider_x509_cert_url": st.secrets.gcp_service_account.auth_provider_x509_cert_url,
-        "client_x509_cert_url": st.secrets.gcp_service_account.client_x509_cert_url,
+        "client_x509_cert_url": st.secrets.ggcp_service_account.client_x509_cert_url,
     }
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
@@ -94,22 +94,11 @@ def main():
     st.title("Event Check-in/out System")
 
     # --- Device Fingerprint Handling ---
-    # Initialize stable session state variable
-    if 'device_fingerprint' not in st.session_state:
-        st.session_state.device_fingerprint = ""
-
-    # Hidden input field that will be populated by our JavaScript
-    st.text_input("Device Fingerprint", key="device_fingerprint_hidden", label_visibility="hidden",
-                  placeholder="__fingerprint_placeholder__")
-
-    st.markdown("""<style>input[placeholder="__fingerprint_placeholder__"] { display: none; }</style>""", unsafe_allow_html=True)
-
-    # JavaScript to get the fingerprint and update the hidden Streamlit input.
+    # This JavaScript component runs in the background to get the fingerprint.
     js_code = '''
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
     <script>
       function setFingerprint() {
-        // Only run if our main state is not yet set
         const fpPromise = FingerprintJS.load();
         fpPromise
           .then(fp => fp.get())
@@ -144,12 +133,10 @@ def main():
     '''
     components.html(js_code, height=0)
 
-    # 【關鍵修正】: 這是解決畫面卡住和狀態遺失的核心。
-    # 這段邏輯會在每次頁面互動時，將隱藏欄位的值同步到我們穩定的 session_state 變數中。
-    # 一旦成功同步，它會立刻觸發一次頁面刷新，以確保整個應用程式都使用最新的正確狀態。
-    if st.session_state.device_fingerprint_hidden and not st.session_state.device_fingerprint:
-        st.session_state.device_fingerprint = st.session_state.device_fingerprint_hidden
-        st.rerun()
+    # Hidden input field that receives the value from JavaScript. Its state is the single source of truth.
+    st.text_input("Device Fingerprint", key="device_fingerprint_hidden", label_visibility="hidden",
+                  placeholder="__fingerprint_placeholder__")
+
 
     # --- Main App Logic ---
     if 'authenticated' not in st.session_state: st.session_state.authenticated = False
@@ -215,7 +202,7 @@ def main():
                 id_match = df[df['EmployeeID'] == st.session_state.search_term]
                 name_match = df[df['Name'] == st.session_state.search_term]
                 if not id_match.empty:
-                    st.session_state.selected_employee_id = id_match['EmployeeID'].iloc[0]
+                    st.session_state.selected__employee_id = id_match['EmployeeID'].iloc[0]
                 elif not name_match.empty:
                     if len(name_match) == 1:
                         st.session_state.selected_employee_id = name_match['EmployeeID'].iloc[0]
@@ -246,7 +233,6 @@ def handle_check_in(df, employee_row, row_index, client):
         st.session_state.feedback_message = {"type": "warning", "text": "您已報到，無須重複操作 / You have already checked in."}
         st.session_state.selected_employee_id = None
         st.session_state.search_term = ""
-        st.session_state.device_fingerprint = "" # Reset for next user
         st.rerun()
         return
 
@@ -254,34 +240,36 @@ def handle_check_in(df, employee_row, row_index, client):
     employee_id = employee_row['EmployeeID'].iloc[0]
     st.info(f"正在為 **{name}** ({employee_id}) 辦理報到手續。 / Processing check-in for **{name}** ({employee_id}).")
 
-    # The logic now exclusively uses the stable 'device_fingerprint' state
-    fingerprint = st.session_state.get('device_fingerprint')
+    # 【關鍵修正】: 直接從隱藏的 text_input 元件讀取狀態。這是最直接、最可靠的狀態來源。
+    fingerprint = st.session_state.get('device_fingerprint_hidden')
 
-    if not fingerprint:
+    # 檢查讀取到的值是否有效
+    if not fingerprint or fingerprint == "__fingerprint_placeholder__":
         st.text_input("設備識別碼 / Device Fingerprint", "正在獲取中... / Acquiring...", disabled=True)
         st.warning("正在識別您的裝置，請稍候... / Identifying your device, please wait...")
+        # 讓 Streamlit 自然地等待下一次由 JS input event 觸發的刷新
         return
-
-    # If we get here, the fingerprint is available and stable
+    
+    # 如果程式能執行到這裡，代表 fingerprint 已經成功獲取
     st.text_input("設備識別碼 / Device Fingerprint", value=fingerprint, disabled=True)
 
     if st.button("✅ 確認報到 / Confirm Check-in"):
-        # We use the 'fingerprint' variable which is guaranteed to be correct
-        if 'DeviceFingerprint' in df.columns and not df[df['DeviceFingerprint'] == fingerprint].empty:
+        # 按下按鈕時，再次從最可靠的來源讀取一次，確保萬無一失
+        final_fingerprint = st.session_state.get('device_fingerprint_hidden')
+        if 'DeviceFingerprint' in df.columns and not df[df['DeviceFingerprint'] == final_fingerprint].empty:
             st.session_state.feedback_message = {"type": "error", "text": "此裝置已完成報到 / This device has already been used for check-in."}
         else:
             table_no = employee_row['TableNo'].iloc[0]
             tz = pytz.timezone(TIMEZONE)
             timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
             update_cell(client, "Event_Check-in", "Sheet1", row_index, 4, timestamp)
-            update_cell(client, "Event_Check-in", "Sheet1", row_index, 6, fingerprint)
+            update_cell(client, "Event_Check-in", "Sheet1", row_index, 6, final_fingerprint)
             st.session_state.feedback_message = {"type": "success", "text": f"報到成功！歡迎 {name}，您的桌號在 {table_no} / Check-in successful! Welcome {name}, your table is {table_no}"}
 
-        # Reset all relevant states for the next user
+        # 重設狀態，準備給下一位使用者
         st.session_state.selected_employee_id = None
         st.session_state.search_term = ""
-        st.session_state.device_fingerprint = ""
-        st.session_state.device_fingerprint_hidden = ""
+        # 這裡不需要清除 fingerprint 狀態，因為下一個人進來時，JS 會用新的值覆蓋它
         st.rerun()
 
 def handle_check_out(employee_row, row_index, client):
@@ -295,11 +283,8 @@ def handle_check_out(employee_row, row_index, client):
         update_cell(client, "Event_Check-in", "Sheet1", row_index, 5, timestamp)
         st.session_state.feedback_message = {"type": "success", "text": "簽退成功，祝您有個美好的一天！ / Check-out successful, have a nice day!"}
 
-    # Reset state for the next user
     st.session_state.selected_employee_id = None
     st.session_state.search_term = ""
-    st.session_state.device_fingerprint = ""
-    st.session_state.device_fingerprint_hidden = ""
     st.rerun()
 
 if __name__ == "__main__":
