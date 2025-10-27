@@ -122,6 +122,7 @@ def main():
     """, unsafe_allow_html=True)
 
     # JavaScript to get the fingerprint and update the hidden Streamlit input
+    # ** MODIFIED: Re-introduced polling for stability **
     js_code = '''
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
     <script>
@@ -133,26 +134,37 @@ def main():
             const visitorId = result.visitorId;
             console.log("Device Fingerprint:", visitorId);
 
-            // Find the hidden input element in the parent document
-            const input = window.parent.document.querySelector('input[placeholder="__fingerprint_placeholder__"]');
+            let attempts = 0;
+            const maxAttempts = 50; // Try for 5 seconds
+            const intervalId = setInterval(() => {
+                attempts++;
+                const input = window.parent.document.querySelector('input[placeholder="__fingerprint_placeholder__"]');
 
-            if (input && input.value === "") {
-                input.value = visitorId;
-                // Dispatch an event to let Streamlit know the input has changed
-                const event = new Event('input', { bubbles: true });
-                input.dispatchEvent(event);
-            }
+                if (input) {
+                    if(input.value === "") {
+                        input.value = visitorId;
+                        const event = new Event('input', { bubbles: true });
+                        input.dispatchEvent(event);
+                        console.log('Fingerprint set successfully.');
+                    }
+                    clearInterval(intervalId);
+                } else if (attempts >= maxAttempts) {
+                    clearInterval(intervalId);
+                    console.error('Failed to find the fingerprint input field.');
+                }
+            }, 100); // Check every 100ms
           })
           .catch(error => console.error(error));
       }
-      // Run the function on load/re-load
       setFingerprint();
     </script>
     '''
     components.html(js_code, height=0)
 
     # Copy the value from the hidden input to a more accessible session_state variable
-    st.session_state.device_fingerprint = st.session_state.device_fingerprint_hidden
+    # This ensures the rest of the app can react to the JS-driven change
+    if st.session_state.device_fingerprint_hidden:
+        st.session_state.device_fingerprint = st.session_state.device_fingerprint_hidden
 
 
     # --- Main App Logic ---
@@ -268,11 +280,11 @@ def handle_check_in(df, employee_row, row_index, client):
 
     fingerprint = st.session_state.get('device_fingerprint')
 
-    # If fingerprint is not available yet, show a loading state within the disabled input
+    # If fingerprint is not available yet, show a loading state and instruct user to wait.
     if not fingerprint:
         st.text_input("設備識別碼 / Device Fingerprint", "正在獲取中... / Acquiring...", disabled=True)
-        st.warning("正在識別您的裝置，請稍候... / Identifying your device, please wait...")
-        return
+        st.warning("正在識別您的裝置，請稍候幾秒，識別碼將會自動出現 / Identifying your device, please wait a few seconds and the ID will appear automatically.")
+        st.stop() # Stop further execution until the next rerun
     else:
         st.text_input("設備識別碼 / Device Fingerprint", value=fingerprint, disabled=True)
 
