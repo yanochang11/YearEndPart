@@ -105,41 +105,53 @@ def main():
     st.set_page_config(page_title="Event Check-in/out System", initial_sidebar_state="collapsed")
     st.title("Event Check-in/out System")
 
-    # --- Device Fingerprint ---
-    if 'device_fingerprint' not in st.session_state:
-        st.session_state.device_fingerprint = ""
-
-    # Create a hidden container for the text input.
-    # The text_input to store the fingerprint, bound to session_state.
-    # The JavaScript below will populate this input.
-    st.markdown('<div id="fingerprint-container" style="display: none;">', unsafe_allow_html=True)
-    st.text_input("Device Fingerprint", key="device_fingerprint", label_visibility="hidden")
-    st.markdown('</div>', unsafe_allow_html=True)
-
     # The JavaScript to get the fingerprint and inject it into the text_input
     js_code = '''
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
     <script>
-      function setFingerprint() {
-        const fpPromise = FingerprintJS.load();
-        fpPromise
-          .then(fp => fp.get())
-          .then(result => {
-            const visitorId = result.visitorId;
-            const input = window.parent.document.querySelector('div[id="fingerprint-container"] input');
-            if (input && input.value === "") {
-                input.value = visitorId;
-                const event = new Event('input', { bubbles: true });
-                input.dispatchEvent(event);
-            }
-          })
-          .catch(error => console.error(error));
+      function getAndSetFingerprint() {
+        // a function to check if a query parameter exists
+        function getQueryParam(param) {
+            const urlParams = new URLSearchParams(window.location.search);
+            return urlParams.get(param);
+        }
+
+        // only run the script if the fingerprint query parameter is not already set
+        if (!getQueryParam('fingerprint')) {
+            const fpPromise = FingerprintJS.load();
+            fpPromise
+                .then(fp => fp.get())
+                .then(result => {
+                    const visitorId = result.visitorId;
+                    // reload the page with the fingerprint as a query parameter
+                    window.location.search += (window.location.search ? '&' : '') + 'fingerprint=' + visitorId;
+                })
+                .catch(error => console.error(error));
+        }
       }
-      // Set a timeout to allow the DOM to render.
-      setTimeout(setFingerprint, 500);
+
+      // run the function
+      getAndSetFingerprint();
     </script>
     '''
     components.html(js_code, height=0)
+
+    # --- Device Fingerprint Handling ---
+    if 'device_fingerprint' not in st.session_state:
+        st.session_state.device_fingerprint = None
+
+    # Try to get the fingerprint from the query parameters
+    try:
+        fingerprint_from_query = st.query_params.get("fingerprint")
+        if fingerprint_from_query and st.session_state.device_fingerprint is None:
+            st.session_state.device_fingerprint = fingerprint_from_query
+            # Use st.rerun() to immediately clear the query param from the URL
+            # and ensure the app logic uses the fingerprint from session_state
+            st.rerun()
+    except Exception as e:
+        # st.query_params might not be available in all contexts
+        pass
+
 
     # Initialize session state for user-specific data
     if 'authenticated' not in st.session_state:
