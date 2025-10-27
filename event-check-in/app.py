@@ -106,58 +106,61 @@ def main():
     st.title("Event Check-in/out System")
 
     # --- Device Fingerprint Handling ---
-    # Initialize session state for the fingerprint
+    # 1. Initialize session state
     if 'device_fingerprint' not in st.session_state:
-        st.session_state.device_fingerprint = None
+        st.session_state.device_fingerprint = ""
 
-    # Try to get the fingerprint from the query parameters
-    try:
-        fingerprint_from_query = st.query_params.get("fingerprint")
-        if fingerprint_from_query and st.session_state.device_fingerprint is None:
-            st.session_state.device_fingerprint = fingerprint_from_query
-    except Exception:
-        # st.query_params might not be available in some rare cases on first load
-        pass
+    # 2. Add a text input to receive the fingerprint.
+    # We use a specific key and data-testid to target it with CSS and JS.
+    st.text_input(
+        "Device Fingerprint",
+        key="device_fingerprint",
+        data-testid="device_fingerprint_input",
+        label_visibility="hidden"
+    )
 
-    # If the fingerprint is not yet available, inject JS and stop further execution
-    if st.session_state.device_fingerprint is None:
-        st.info("正在識別您的裝置，請稍候... / Identifying your device, please wait...")
+    # 3. Inject CSS to hide the text input completely.
+    # This is more robust than wrapping in a div.
+    st.markdown("""
+        <style>
+        div[data-testid="device_fingerprint_input"] {
+            display: none;
+        }
+        </style>
+    """, unsafe_allow_html=True)
 
-        js_code = '''
-        <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
-        <script>
-          function getAndSetFingerprint() {
-            const urlParams = new URLSearchParams(window.location.search);
-            if (!urlParams.has('fingerprint')) {
-                const fpPromise = FingerprintJS.load();
-                fpPromise
-                    .then(fp => fp.get())
-                    .then(result => {
-                        const visitorId = result.visitorId;
-                        console.log("Device Fingerprint:", visitorId); // For debugging
+    # 4. Inject the JavaScript to get the fingerprint and set the input's value
+    js_code = '''
+    <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
+    <script>
+      function setFingerprint() {
+        const fpPromise = FingerprintJS.load();
+        fpPromise
+          .then(fp => fp.get())
+          .then(result => {
+            const visitorId = result.visitorId;
+            console.log("Device Fingerprint:", visitorId);
 
-                        // Construct the new URL for the parent window
-                        let currentUrl = window.parent.location.href;
-                        let newUrl = new URL(currentUrl);
+            // Find the input element in the parent document
+            const input = window.parent.document.querySelector('div[data-testid="device_fingerprint_input"] input');
 
-                        // Add the fingerprint to the search parameters
-                        newUrl.searchParams.set('fingerprint', visitorId);
-
-                        // Redirect the parent window
-                        window.parent.location.href = newUrl.toString();
-                    })
-                    .catch(error => console.error(error));
+            // Check if the input is found and its value is not already set
+            if (input && input.value === "") {
+                input.value = visitorId;
+                // Create and dispatch an 'input' event to notify Streamlit
+                const event = new Event('input', { bubbles: true });
+                input.dispatchEvent(event);
             }
-          }
-          // Use a small timeout to ensure the browser has time to render the page
-          setTimeout(getAndSetFingerprint, 50);
-        </script>
-        '''
-        components.html(js_code, height=0)
-        st.stop() # Stop the app from running further until the page reloads with the fingerprint
+          })
+          .catch(error => console.error(error));
+      }
+      // Set a timeout to ensure the DOM is ready
+      setTimeout(setFingerprint, 500);
+    </script>
+    '''
+    components.html(js_code, height=0)
 
     # --- Main App Logic ---
-    # (The rest of the app will only run if a fingerprint has been successfully obtained)
 
     # Initialize session state for user-specific data
     if 'authenticated' not in st.session_state:
@@ -278,8 +281,11 @@ def main():
 
 def handle_check_in(df, employee_row, row_index, client):
     fingerprint = st.session_state.get('device_fingerprint')
+
+    # If fingerprint is not available yet, ask the user to wait and try again.
     if not fingerprint:
-        st.session_state.feedback_message = {"type": "error", "text": "無法識別您的裝置，請重新整理頁面再試一次 / Could not identify your device. Please refresh the page and try again."}
+        st.session_state.feedback_message = {"type": "warning", "text": "正在識別您的裝置，請稍候幾秒後再按一次確認 / Identifying your device, please wait a few seconds and press Confirm again."}
+        # We don't clear the user's selection here, so they can just press the button again.
         return
 
     # Check if 'DeviceFingerprint' column exists and if the fingerprint is already in it
