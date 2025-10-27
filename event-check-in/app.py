@@ -14,7 +14,7 @@ TIMEZONE = "Asia/Taipei"
 @st.cache_resource(ttl=600)
 def get_gsheet():
     """Establishes a connection to the Google Sheet using cached credentials."""
-    scope = ["https.spreadsheets.google.com/feeds", "https.googleapis.com/auth/drive"]
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds_dict = {
         "type": st.secrets.gcp_service_account.type,
         "project_id": st.secrets.gcp_service_account.project_id,
@@ -92,7 +92,6 @@ def get_fingerprint_component():
     js_code = """
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
     <script>
-      // Use a flag on the window object to ensure this logic runs only once per page load.
       if (!window.fingerprintPromise) {
         window.fingerprintPromise = new Promise(async (resolve, reject) => {
           try {
@@ -104,8 +103,6 @@ def get_fingerprint_component():
           }
         });
       }
-
-      // Send the result back to Streamlit once the promise is resolved.
       window.fingerprintPromise.then(visitorId => {
         Streamlit.setComponentValue(visitorId);
       }).catch(error => {
@@ -114,7 +111,8 @@ def get_fingerprint_component():
       });
     </script>
     """
-    return components.html(js_code, height=0, key="fingerprint_component")
+    # 移除 key 參數
+    return components.html(js_code, height=0)
 
 def main():
     """Main function to run the Streamlit application."""
