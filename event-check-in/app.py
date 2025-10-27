@@ -91,23 +91,28 @@ def get_fingerprint_component():
     js_code = """
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
     <script>
-      if (!window.fingerprintPromise) {
-        window.fingerprintPromise = new Promise(async (resolve, reject) => {
-          try {
-            const fp = await FingerprintJS.load();
-            const result = await fp.get();
-            resolve(result.visitorId);
-          } catch (error) {
-            reject(error);
-          }
-        });
+      function setFingerprint() {
+        // Ensure Streamlit object is available
+        if (window.Streamlit) {
+          (async () => {
+            try {
+              const fp = await FingerprintJS.load();
+              const result = await fp.get();
+              // Send the result back to Streamlit
+              Streamlit.setComponentValue(result.visitorId);
+            } catch (error) {
+              console.error("FingerprintJS error:", error);
+              Streamlit.setComponentValue("error");
+            }
+          })();
+        }
       }
-      window.fingerprintPromise.then(visitorId => {
-        Streamlit.setComponentValue(visitorId);
-      }).catch(error => {
-        console.error("FingerprintJS error:", error);
-        Streamlit.setComponentValue("error");
-      });
+
+      // Add an event listener to run the function when the component is ready
+      window.addEventListener("streamlit:component_ready", setFingerprint);
+
+      // As a fallback, in case the event doesn't fire, try to run it after a short delay
+      setTimeout(setFingerprint, 50);
     </script>
     """
     return components.html(js_code, height=0)
@@ -122,13 +127,10 @@ def main():
     if st.session_state.device_fingerprint is None:
         fingerprint = get_fingerprint_component()
         
-        # --- 關鍵修改 ---
-        # 只有當回傳的值是字串 (str) 時，才認定我們已成功獲取指紋
         if isinstance(fingerprint, str):
             st.session_state.device_fingerprint = fingerprint
             st.rerun()
         else:
-            # 如果回傳的不是字串 (例如，是 DeltaGenerator 物件或 None)，就繼續等待
             st.info("🔄 正在初始化報到系統，請稍候...")
             st.info("🔄 Initializing the check-in system, please wait...")
             return
