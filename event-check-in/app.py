@@ -93,21 +93,18 @@ def main():
     st.set_page_config(page_title="Event Check-in/out System", initial_sidebar_state="collapsed")
     st.title("Event Check-in/out System")
 
-    # --- Device Fingerprint Handling ---
+    # --- 【全新架構】 ---
+    # 步驟 1: 初始化 session_state
     if 'device_fingerprint' not in st.session_state:
         st.session_state.device_fingerprint = None
 
-    # 【錯誤修正】使用 streamlit:component-ready 事件監聽器來確保 Streamlit 物件已定義
+    # 步驟 2: 執行 JS 來獲取指紋
     js_code = f'''
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
     <script>
       function setFingerprint() {{
-        // 使用 window 物件上的旗標，確保這個複雜的函式只執行一次
-        if (window.fingerprintSet) {{
-            return;
-        }}
+        if (window.fingerprintSet) {{ return; }}
         window.fingerprintSet = true;
-
         (async () => {{
             try {{
                 const fp = await FingerprintJS.load();
@@ -117,25 +114,28 @@ def main():
                 Streamlit.setComponentValue({{ "fingerprint": visitorId }});
             }} catch (error) {{
                 console.error("FingerprintJS error:", error);
-                window.fingerprintSet = false; // 如果失敗，允許重試
+                window.fingerprintSet = false;
             }}
         }})();
       }}
-
-      // 監聽 Streamlit 的 component-ready 事件，確保 Streamlit 物件可用
-      window.addEventListener('streamlit:component-ready', function() {{
-          setFingerprint();
-      }});
+      window.addEventListener('streamlit:component-ready', setFingerprint);
     </script>
     '''
     component_value = components.html(js_code, height=0)
 
+    # 步驟 3: 後端接收到 JS 傳來的值後，更新 session_state 並刷新一次
     if isinstance(component_value, dict) and "fingerprint" in component_value:
         if st.session_state.device_fingerprint != component_value["fingerprint"]:
             st.session_state.device_fingerprint = component_value["fingerprint"]
             st.rerun()
 
-    # --- Main App Logic ---
+    # 步驟 4: 應用程式閘門 - 如果指紋還沒準備好，就顯示等待畫面並停止執行
+    if not st.session_state.device_fingerprint:
+        st.info("🔄 正在初始化報到系統，請稍候...")
+        st.info("🔄 Initializing the check-in system, please wait...")
+        return  # 停止執行，直到下一次 rerun
+
+    # --- Main App Logic (只有在指紋準備好後才會執行) ---
     if 'authenticated' not in st.session_state: st.session_state.authenticated = False
     if 'search_term' not in st.session_state: st.session_state.search_term = ""
     if 'selected_employee_id' not in st.session_state: st.session_state.selected_employee_id = None
@@ -238,13 +238,8 @@ def handle_check_in(df, employee_row, row_index, client):
     employee_id = employee_row['EmployeeID'].iloc[0]
     st.info(f"正在為 **{name}** ({employee_id}) 辦理報到手續。 / Processing check-in for **{name}** ({employee_id}).")
 
+    # 因為主程式有閘門，這裡的 fingerprint 一定會有值
     fingerprint = st.session_state.get('device_fingerprint')
-
-    if not fingerprint:
-        st.text_input("設備識別碼 / Device Fingerprint", "正在獲取中... / Acquiring...", disabled=True)
-        st.warning("正在識別您的裝置，請稍候... / Identifying your device, please wait...")
-        return
-
     st.text_input("設備識別碼 / Device Fingerprint", value=fingerprint, disabled=True)
 
     if st.button("✅ 確認報到 / Confirm Check-in"):
@@ -258,9 +253,10 @@ def handle_check_in(df, employee_row, row_index, client):
             update_cell(client, "Event_Check-in", "Sheet1", row_index, 6, fingerprint)
             st.session_state.feedback_message = {"type": "success", "text": f"報到成功！歡迎 {name}，您的桌號在 {table_no} / Check-in successful! Welcome {name}, your table is {table_no}"}
 
+        # 為下一位使用者重設狀態，但保留指紋以便快速報到
         st.session_state.selected_employee_id = None
         st.session_state.search_term = ""
-        st.session_state.device_fingerprint = None
+        # 注意：我們不再重設 device_fingerprint，因為同一個裝置可能會連續報到
         st.rerun()
 
 def handle_check_out(employee_row, row_index, client):
