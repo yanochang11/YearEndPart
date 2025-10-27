@@ -94,16 +94,7 @@ def main():
     st.title("Event Check-in/out System")
 
     # --- Device Fingerprint Handling ---
-    if 'device_fingerprint' not in st.session_state:
-        st.session_state.device_fingerprint = ""
-
-    # Hidden input field that will be populated by our JavaScript
-    st.text_input("Device Fingerprint", key="device_fingerprint_hidden", label_visibility="hidden",
-                  placeholder="__fingerprint_placeholder__")
-
-    st.markdown("""<style>input[placeholder="__fingerprint_placeholder__"] { display: none; }</style>""", unsafe_allow_html=True)
-
-    # JavaScript to get the fingerprint and update the hidden Streamlit input. This is the most robust version.
+    # This JavaScript will run in the background on every page load/interaction.
     js_code = '''
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
     <script>
@@ -124,17 +115,16 @@ def main():
                 if (input) {
                     if(input.value === "") {
                         input.value = visitorId;
-                        // Dispatch event to notify Streamlit of the change
                         const event = new Event('input', { bubbles: true });
                         input.dispatchEvent(event);
-                        console.log('Fingerprint set successfully.');
+                        console.log('Fingerprint set successfully into hidden field.');
                     }
-                    clearInterval(intervalId); // Stop polling once successful
+                    clearInterval(intervalId);
                 } else if (attempts >= maxAttempts) {
-                    clearInterval(intervalId); // Stop polling after timeout
+                    clearInterval(intervalId);
                     console.error('Failed to find the fingerprint input field.');
                 }
-            }, 100); // Check every 100ms
+            }, 100);
           })
           .catch(error => console.error(error));
       }
@@ -143,18 +133,16 @@ def main():
     '''
     components.html(js_code, height=0)
 
-    # 【關鍵修正】: 這是解決畫面卡住的核心。
-    # 這段邏輯會在每次頁面互動時檢查：如果 JS 已經填入了隱藏欄位，但我們的主變數還是空的，
-    # 就把值同步過來，並立刻觸發一次頁面刷新。
-    if st.session_state.device_fingerprint_hidden and not st.session_state.device_fingerprint:
-        st.session_state.device_fingerprint = st.session_state.device_fingerprint_hidden
-        st.rerun()
-
     # --- Main App Logic ---
     if 'authenticated' not in st.session_state: st.session_state.authenticated = False
     if 'search_term' not in st.session_state: st.session_state.search_term = ""
     if 'selected_employee_id' not in st.session_state: st.session_state.selected_employee_id = None
     if 'feedback_message' not in st.session_state: st.session_state.feedback_message = None
+
+    # Hidden input field that will be populated by our JavaScript
+    st.text_input("Device Fingerprint", key="device_fingerprint_hidden", label_visibility="hidden",
+                  placeholder="__fingerprint_placeholder__")
+
 
     GOOGLE_SHEET_NAME = "Event_Check-in"
     WORKSHEET_NAME = "Sheet1"
@@ -252,31 +240,32 @@ def handle_check_in(df, employee_row, row_index, client):
     employee_id = employee_row['EmployeeID'].iloc[0]
     st.info(f"正在為 **{name}** ({employee_id}) 辦理報到手續。 / Processing check-in for **{name}** ({employee_id}).")
 
-    fingerprint = st.session_state.get('device_fingerprint')
+    # 【關鍵修正】: Python 從 JS 填入的隱藏欄位讀取狀態
+    fingerprint = st.session_state.get('device_fingerprint_hidden')
 
     if not fingerprint:
-        st.text_input("設備識別碼 / Device Fingerprint", "正在獲取中... / Acquiring...", disabled=True)
-        st.warning("正在識別您的裝置，請稍候... / Identifying your device, please wait...")
-        # 此處不再需要 st.stop() 或手動按鈕。上面的 st.rerun() 機制會自動處理刷新。
-        return
+        st.warning("正在識別您的裝置... / Identifying your device...")
+        # 提供一個手動按鈕，作為最可靠的同步方式
+        if st.button("🔄 載入識別碼 / Load Fingerprint"):
+            # 這個按鈕的唯一作用就是觸發一次 rerun，讓 Python 有機會重新讀取上面的 fingerprint 狀態
+            st.rerun()
+    else:
+        # 如果成功載入，則顯示識別碼和確認按鈕
+        st.text_input("設備識別碼 / Device Fingerprint", value=fingerprint, disabled=True)
+        if st.button("✅ 確認報到 / Confirm Check-in"):
+            if 'DeviceFingerprint' in df.columns and not df[df['DeviceFingerprint'] == fingerprint].empty:
+                st.session_state.feedback_message = {"type": "error", "text": "此裝置已完成報到 / This device has already been used for check-in."}
+            else:
+                table_no = employee_row['TableNo'].iloc[0]
+                tz = pytz.timezone(TIMEZONE)
+                timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+                update_cell(client, "Event_Check-in", "Sheet1", row_index, 4, timestamp)
+                update_cell(client, "Event_Check-in", "Sheet1", row_index, 6, fingerprint)
+                st.session_state.feedback_message = {"type": "success", "text": f"報到成功！歡迎 {name}，您的桌號在 {table_no} / Check-in successful! Welcome {name}, your table is {table_no}"}
 
-    # 如果程式能執行到這裡，代表 fingerprint 已經成功獲取
-    st.text_input("設備識別碼 / Device Fingerprint", value=fingerprint, disabled=True)
-
-    if st.button("✅ 確認報到 / Confirm Check-in"):
-        if 'DeviceFingerprint' in df.columns and not df[df['DeviceFingerprint'] == fingerprint].empty:
-            st.session_state.feedback_message = {"type": "error", "text": "此裝置已完成報到 / This device has already been used for check-in."}
-        else:
-            table_no = employee_row['TableNo'].iloc[0]
-            tz = pytz.timezone(TIMEZONE)
-            timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
-            update_cell(client, "Event_Check-in", "Sheet1", row_index, 4, timestamp)
-            update_cell(client, "Event_Check-in", "Sheet1", row_index, 6, fingerprint)
-            st.session_state.feedback_message = {"type": "success", "text": f"報到成功！歡迎 {name}，您的桌號在 {table_no} / Check-in successful! Welcome {name}, your table is {table_no}"}
-
-        st.session_state.selected_employee_id = None
-        st.session_state.search_term = ""
-        st.rerun()
+            st.session_state.selected_employee_id = None
+            st.session_state.search_term = ""
+            st.rerun()
 
 def handle_check_out(employee_row, row_index, client):
     """Handles the check-out process for a selected employee."""
