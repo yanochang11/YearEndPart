@@ -110,20 +110,19 @@ def main():
     if 'device_fingerprint' not in st.session_state:
         st.session_state.device_fingerprint = ""
 
-    # 2. Add a text input to receive the fingerprint.
-    # We use a specific key and data-testid to target it with CSS and JS.
+    # 2. Wrap the text input in a div with a custom class for CSS targeting.
+    st.markdown('<div class="fingerprint-container">', unsafe_allow_html=True)
     st.text_input(
         "Device Fingerprint",
         key="device_fingerprint",
-        data-testid="device_fingerprint_input",
         label_visibility="hidden"
     )
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    # 3. Inject CSS to hide the text input completely.
-    # This is more robust than wrapping in a div.
+    # 3. Inject CSS to hide the div containing the text input.
     st.markdown("""
         <style>
-        div[data-testid="device_fingerprint_input"] {
+        .fingerprint-container {
             display: none;
         }
         </style>
@@ -141,8 +140,8 @@ def main():
             const visitorId = result.visitorId;
             console.log("Device Fingerprint:", visitorId);
 
-            // Find the input element in the parent document
-            const input = window.parent.document.querySelector('div[data-testid="device_fingerprint_input"] input');
+            // Find the input element within the container in the parent document
+            const input = window.parent.document.querySelector('.fingerprint-container input');
 
             // Check if the input is found and its value is not already set
             if (input && input.value === "") {
