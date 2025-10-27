@@ -1,2 +1,5 @@
 # Streamlit secrets
 .streamlit/secrets.toml
+
+# Log files
+*.log

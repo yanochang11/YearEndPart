@@ -110,18 +110,18 @@ def main():
     if 'device_fingerprint' not in st.session_state:
         st.session_state.device_fingerprint = ""
 
-    # 2. Add the text input with a data-testid for robust targeting.
+    # 2. Add a hidden marker div and then the text input.
+    st.markdown('<div id="fingerprint_marker"></div>', unsafe_allow_html=True)
     st.text_input(
-        "Device Fingerprint", # This label is not used for selection, just for clarity
+        "Device Fingerprint", # This label is not used for selection
         key="device_fingerprint",
-        label_visibility="hidden",
-        data_testid="device_fingerprint_input" # Use underscore, converted to hyphen in HTML
+        label_visibility="hidden"
     )
 
-    # 3. Inject CSS to hide the text input completely.
+    # 3. Inject CSS to hide the div that immediately follows our marker.
     st.markdown("""
         <style>
-        div[data-testid="device_fingerprint_input"] {
+        #fingerprint_marker + div {
             display: none;
         }
         </style>
@@ -139,20 +139,30 @@ def main():
             const visitorId = result.visitorId;
             console.log("Device Fingerprint:", visitorId);
 
-            // Find the input element in the parent document using the data-testid
-            const input = window.parent.document.querySelector('div[data-testid="device_fingerprint_input"] input');
+            let attempts = 0;
+            const maxAttempts = 50; // 50 * 100ms = 5 seconds
+            const intervalId = setInterval(() => {
+                attempts++;
+                const input = window.parent.document.querySelector('#fingerprint_marker + div input');
 
-            // Check if the input is found and its value is not already set
-            if (input && input.value === "") {
-                input.value = visitorId;
-                // Create and dispatch an 'input' event to notify Streamlit
-                const event = new Event('input', { bubbles: true });
-                input.dispatchEvent(event);
+                if (input) {
+                    if(input.value === "") {
+                        input.value = visitorId;
+                        const event = new Event('input', { bubbles: true });
+                        input.dispatchEvent(event);
+                        console.log('Fingerprint set successfully.');
+                    }
+                    clearInterval(intervalId); // Stop polling once the input is found (and potentially set)
+                } else if (attempts >= maxAttempts) {
+                    clearInterval(intervalId); // Stop polling after timeout
+                    console.error('Failed to find the fingerprint input field after 5 seconds.');
+                }
+            }, 100);
           })
           .catch(error => console.error(error));
       }
-      // Set a timeout to ensure the DOM is ready
-      setTimeout(setFingerprint, 500);
+      // Run the function on load
+      setFingerprint();
     </script>
     '''
     components.html(js_code, height=0)
