@@ -134,8 +134,17 @@ def main():
                     .then(fp => fp.get())
                     .then(result => {
                         const visitorId = result.visitorId;
-                        // Reload the page with the fingerprint as a query parameter
-                        window.location.search += (window.location.search ? '&' : '') + 'fingerprint=' + visitorId;
+                        console.log("Device Fingerprint:", visitorId); // For debugging
+
+                        // Construct the new URL for the parent window
+                        let currentUrl = window.parent.location.href;
+                        let newUrl = new URL(currentUrl);
+
+                        // Add the fingerprint to the search parameters
+                        newUrl.searchParams.set('fingerprint', visitorId);
+
+                        // Redirect the parent window
+                        window.parent.location.href = newUrl.toString();
                     })
                     .catch(error => console.error(error));
             }
