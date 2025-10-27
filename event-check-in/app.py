@@ -110,12 +110,22 @@ def main():
     if 'device_fingerprint' not in st.session_state:
         st.session_state.device_fingerprint = ""
 
-    # 2. Add the text input with a unique, hidden label for JS targeting.
+    # 2. Add the text input with a unique placeholder for JS targeting.
     st.text_input(
-        "__internal_fingerprint_input__", # This label will be used by JS to find the input
+        "Device Fingerprint", # A generic label
         key="device_fingerprint",
-        label_visibility="hidden"
+        label_visibility="hidden",
+        placeholder="__fingerprint_placeholder__" # This will be our unique selector
     )
+
+    # 3. Inject CSS to hide the input based on its unique placeholder.
+    st.markdown("""
+        <style>
+        input[placeholder="__fingerprint_placeholder__"] {
+            display: none;
+        }
+        </style>
+    """, unsafe_allow_html=True)
 
     # 4. Inject the JavaScript to get the fingerprint and set the input's value
     js_code = '''
@@ -134,33 +144,20 @@ def main():
             const intervalId = setInterval(() => {
                 attempts++;
 
-                // Find the label in the parent document that matches our unique internal label
-                const labels = window.parent.document.querySelectorAll('label');
-                let targetInputId = null;
-                labels.forEach(label => {
-                    if (label.innerText === '__internal_fingerprint_input__') {
-                        targetInputId = label.htmlFor;
-                    }
-                });
+                // Find the input element in the parent document using its unique placeholder
+                const input = window.parent.document.querySelector('input[placeholder="__fingerprint_placeholder__"]');
 
-                // If we found the corresponding input ID, get the input element and set its value
-                if (targetInputId) {
-                    const input = window.parent.document.getElementById(targetInputId);
-                    if (input) {
-                         if(input.value === "") {
-                            input.value = visitorId;
-                            const event = new Event('input', { bubbles: true });
-                            input.dispatchEvent(event);
-                            console.log('Fingerprint set successfully.');
-                        }
-                        clearInterval(intervalId); // Stop polling once the input is found
-                        return;
+                if (input) {
+                    if(input.value === "") {
+                        input.value = visitorId;
+                        const event = new Event('input', { bubbles: true });
+                        input.dispatchEvent(event);
+                        console.log('Fingerprint set successfully.');
                     }
-                }
-
-                if (attempts >= maxAttempts) {
+                    clearInterval(intervalId); // Stop polling once the input is found
+                } else if (attempts >= maxAttempts) {
                     clearInterval(intervalId); // Stop polling after timeout
-                    console.error('Failed to find the fingerprint input field via label after 5 seconds.');
+                    console.error('Failed to find the fingerprint input field via placeholder after 5 seconds.');
                 }
             }, 100);
           })
