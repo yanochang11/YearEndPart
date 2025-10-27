@@ -87,7 +87,6 @@ def save_settings(client, sheet_name, mode, start_time, end_time):
 def get_fingerprint_component():
     """
     Renders a robust JavaScript component to get the device fingerprint.
-    This version includes a global flag to prevent re-execution.
     """
     js_code = """
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
@@ -111,7 +110,6 @@ def get_fingerprint_component():
       });
     </script>
     """
-    # 移除 key 參數
     return components.html(js_code, height=0)
 
 def main():
@@ -123,10 +121,14 @@ def main():
 
     if st.session_state.device_fingerprint is None:
         fingerprint = get_fingerprint_component()
-        if fingerprint:
+        
+        # --- 關鍵修改 ---
+        # 只有當回傳的值是字串 (str) 時，才認定我們已成功獲取指紋
+        if isinstance(fingerprint, str):
             st.session_state.device_fingerprint = fingerprint
             st.rerun()
         else:
+            # 如果回傳的不是字串 (例如，是 DeltaGenerator 物件或 None)，就繼續等待
             st.info("🔄 正在初始化報到系統，請稍候...")
             st.info("🔄 Initializing the check-in system, please wait...")
             return
@@ -241,7 +243,6 @@ def handle_check_in(df, employee_row, row_index, client):
     st.text_input("設備識別碼 / Device Fingerprint", value=fingerprint, disabled=True, help="此為瀏覽器識別碼，用於防止重複報到 / This is a browser identifier to prevent duplicate check-ins.")
 
     if st.button("✅ 確認報到 / Confirm Check-in"):
-        # 增加保護，確保 fingerprint 是字串
         if isinstance(fingerprint, str):
             fresh_df = get_data(client, "Event_Check-in", "Sheet1")
             if 'DeviceFingerprint' in fresh_df.columns and not fresh_df[fresh_df['DeviceFingerprint'] == fingerprint].empty:
