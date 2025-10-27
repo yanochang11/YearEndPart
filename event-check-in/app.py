@@ -85,7 +85,6 @@ def save_settings(client, sheet_name, mode, start_time, end_time):
         return
     try:
         settings_sheet = client.open(sheet_name).worksheet("Settings")
-        # Update the range A2:C2 with a list of lists
         settings_sheet.update('A2:C2', [[mode, start_time.strftime('%H:%M'), end_time.strftime('%H:%M')]])
         get_settings.clear() # Clear cache after saving
         st.success("設定已儲存 / Settings saved successfully!")
@@ -105,38 +104,24 @@ def main():
     st.set_page_config(page_title="Event Check-in/out System", initial_sidebar_state="collapsed")
     st.title("Event Check-in/out System")
 
-    # --- Device Fingerprint Handling ---
-    # 1. Initialize session state
+    # --- Device Fingerprint Handling (Runs on every interaction) ---
     if 'device_fingerprint' not in st.session_state:
         st.session_state.device_fingerprint = ""
 
-    # 2. Add the text input with a unique placeholder for JS targeting.
-    st.text_input(
-        "Device Fingerprint", # A generic label
-        key="device_fingerprint",
-        label_visibility="hidden",
-        placeholder="__fingerprint_placeholder__" # This will be our unique selector
-    )
+    # This hidden input will be populated by the JavaScript below
+    st.text_input("Device Fingerprint", key="device_fingerprint_hidden", label_visibility="hidden",
+                  placeholder="__fingerprint_placeholder__")
 
-    # 3. Inject CSS to hide the input based on its unique placeholder.
-    # We use opacity and positioning to hide it, as 'display: none' can prevent event handling.
+    # CSS to hide the input field
     st.markdown("""
         <style>
         input[placeholder="__fingerprint_placeholder__"] {
-            position: absolute;
-            opacity: 0;
-            width: 0;
-            height: 0;
-            border: none;
-            padding: 0;
-            margin: 0;
-            top: -9999px;
-            left: -9999px;
+            display: none;
         }
         </style>
     """, unsafe_allow_html=True)
 
-    # 4. Inject the JavaScript to get the fingerprint and set the input's value
+    # JavaScript to get the fingerprint and update the hidden Streamlit input
     js_code = '''
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
     <script>
@@ -148,39 +133,29 @@ def main():
             const visitorId = result.visitorId;
             console.log("Device Fingerprint:", visitorId);
 
-            let attempts = 0;
-            const maxAttempts = 50; // 50 * 100ms = 5 seconds
-            const intervalId = setInterval(() => {
-                attempts++;
+            // Find the hidden input element in the parent document
+            const input = window.parent.document.querySelector('input[placeholder="__fingerprint_placeholder__"]');
 
-                // Find the input element in the parent document using its unique placeholder
-                const input = window.parent.document.querySelector('input[placeholder="__fingerprint_placeholder__"]');
-
-                if (input) {
-                    if(input.value === "") {
-                        input.value = visitorId;
-                        const event = new Event('input', { bubbles: true });
-                        input.dispatchEvent(event);
-                        console.log('Fingerprint set successfully.');
-                    }
-                    clearInterval(intervalId); // Stop polling once the input is found
-                } else if (attempts >= maxAttempts) {
-                    clearInterval(intervalId); // Stop polling after timeout
-                    console.error('Failed to find the fingerprint input field via placeholder after 5 seconds.');
-                }
-            }, 100);
+            if (input && input.value === "") {
+                input.value = visitorId;
+                // Dispatch an event to let Streamlit know the input has changed
+                const event = new Event('input', { bubbles: true });
+                input.dispatchEvent(event);
+            }
           })
           .catch(error => console.error(error));
       }
-      // Run the function on load
+      // Run the function on load/re-load
       setFingerprint();
     </script>
     '''
     components.html(js_code, height=0)
 
-    # --- Main App Logic ---
+    # Copy the value from the hidden input to a more accessible session_state variable
+    st.session_state.device_fingerprint = st.session_state.device_fingerprint_hidden
 
-    # Initialize session state for user-specific data
+
+    # --- Main App Logic ---
     if 'authenticated' not in st.session_state:
         st.session_state.authenticated = False
     if 'search_term' not in st.session_state:
@@ -196,10 +171,10 @@ def main():
     client = get_gsheet()
     settings = get_settings(client, GOOGLE_SHEET_NAME)
 
-    # --- Main App ---
     st.markdown(f"**目前模式 / Current Mode:** `{settings['mode']}`")
 
     with st.sidebar.expander("管理員面板 / Admin Panel", expanded=False):
+        # Admin Panel Logic remains the same...
         if not st.session_state.authenticated:
             password = st.text_input("請輸入密碼 / Enter password:", type="password", key="password_input")
             if st.button("登入 / Login"):
@@ -219,14 +194,12 @@ def main():
                 st.session_state.authenticated = False
                 st.rerun()
 
-    # Use settings from Google Sheet for the check
     tz = pytz.timezone(TIMEZONE)
     now = datetime.now(tz).time()
     if not (settings['start_time'] <= now <= settings['end_time']):
         st.warning("報到尚未開始或已結束 / Not currently open for check-in/out.")
         return
 
-    # --- Hybrid Data Loading ---
     with st.spinner("正在載入員工名單，請稍候... / Loading employee list..."):
         df = get_data(client, GOOGLE_SHEET_NAME, WORKSHEET_NAME)
 
@@ -234,111 +207,111 @@ def main():
         st.error("無法載入員工名單，請洽詢工作人員 / Could not load employee list, please contact staff.")
         return
 
-    # --- Search Logic (now uses cached DataFrame) ---
-    # Display feedback message if it exists
     if st.session_state.feedback_message:
         message_type = st.session_state.feedback_message["type"]
         message_text = st.session_state.feedback_message["text"]
-        if message_type == "success":
-            st.success(message_text)
-        elif message_type == "warning":
-            st.warning(message_text)
-        elif message_type == "error":
-            st.error(message_text)
-
-    st.session_state.search_term = st.text_input("請輸入您的員工編號或姓名 / Please enter your Employee ID or Name:", value=st.session_state.search_term).strip()
-
-    if st.button("確認 / Confirm"):
-        # Clear previous feedback and selection on a new search
+        if message_type == "success": st.success(message_text)
+        elif message_type == "warning": st.warning(message_text)
+        elif message_type == "error": st.error(message_text)
         st.session_state.feedback_message = None
-        st.session_state.selected_employee_id = None
 
-        if not st.session_state.search_term:
-            st.session_state.feedback_message = {"type": "error", "text": "請輸入您的員工編號或名字 / Please enter your Employee ID or Name"}
+    # --- Search and Confirmation Flow ---
+    if not st.session_state.get('selected_employee_id'):
+        st.session_state.search_term = st.text_input("請輸入您的員工編號或姓名 / Please enter your Employee ID or Name:", value=st.session_state.search_term).strip()
+        if st.button("確認 / Confirm"):
+            # ... Search logic remains the same ...
+            if not st.session_state.search_term:
+                st.session_state.feedback_message = {"type": "error", "text": "請輸入您的員工編號或名字 / Please enter your Employee ID or Name"}
+            else:
+                id_match = df[df['EmployeeID'] == st.session_state.search_term]
+                name_match = df[df['Name'] == st.session_state.search_term]
+                if not id_match.empty:
+                    st.session_state.selected_employee_id = id_match['EmployeeID'].iloc[0]
+                elif not name_match.empty:
+                    if len(name_match) == 1:
+                        st.session_state.selected_employee_id = name_match['EmployeeID'].iloc[0]
+                    else:
+                        st.session_state.feedback_message = {"type": "warning", "text": "找到多位同名員工，請選擇一位 / Multiple employees found with the same name, please select one:"}
+                        for index, row in name_match.iterrows():
+                            if st.button(f"{row['Name']} ({row['EmployeeID']})", key=row['EmployeeID']):
+                                st.session_state.selected_employee_id = row['EmployeeID']
+                                st.rerun()
+                        return
+                else:
+                    st.session_state.feedback_message = {"type": "error", "text": "查無此人，請確認輸入是否正確，或洽詢工作人員 / User not found, please check your input or contact staff."}
             st.rerun()
 
-        # Search by both EmployeeID and Name in the DataFrame
-        id_match = df[df['EmployeeID'] == st.session_state.search_term]
-        name_match = df[df['Name'] == st.session_state.search_term]
-
-        if not id_match.empty:
-            st.session_state.selected_employee_id = id_match['EmployeeID'].iloc[0]
-        elif not name_match.empty:
-            if len(name_match) == 1:
-                st.session_state.selected_employee_id = name_match['EmployeeID'].iloc[0]
-            else:
-                # Multiple matches found, prompt user to select
-                st.session_state.feedback_message = {"type": "warning", "text": "找到多位同名員工，請選擇一位 / Multiple employees found with the same name, please select one:"}
-                for index, row in name_match.iterrows():
-                    if st.button(f"{row['Name']} ({row['EmployeeID']})", key=row['EmployeeID']):
-                        st.session_state.selected_employee_id = row['EmployeeID']
-                        st.session_state.feedback_message = None # Clear warning after selection
-                        st.rerun()
-                return
-        else:
-            st.session_state.feedback_message = {"type": "error", "text": "查無此人，請確認輸入是否正確，或洽詢工作人員 / User not found, please check your input or contact staff."}
-        st.rerun()
-
-    if st.session_state.get('selected_employee_id'):
+    else: # An employee has been selected
         employee_id = st.session_state.selected_employee_id
         employee_row = df[df['EmployeeID'] == employee_id]
-
         if not employee_row.empty:
             row_index = employee_row.index[0] + 2
-
             if settings['mode'] == "Check-in":
                 handle_check_in(df, employee_row, row_index, client)
             else: # Check-out
                 handle_check_out(employee_row, row_index, client)
 
-            # Clear selection and search term, but keep the feedback message
-            st.session_state.selected_employee_id = None
-            st.session_state.search_term = ""
-            st.rerun()
-
 
 def handle_check_in(df, employee_row, row_index, client):
-    fingerprint = st.session_state.get('device_fingerprint')
-
-    # If fingerprint is not available yet, ask the user to wait and try again.
-    if not fingerprint:
-        st.session_state.feedback_message = {"type": "warning", "text": "正在識別您的裝置，請稍候幾秒後再按一次確認 / Identifying your device, please wait a few seconds and press Confirm again."}
-        # We don't clear the user's selection here, so they can just press the button again.
-        return
-
-    # Check if 'DeviceFingerprint' column exists and if the fingerprint is already in it
-    if 'DeviceFingerprint' in df.columns and not df[df['DeviceFingerprint'] == fingerprint].empty:
-        st.session_state.feedback_message = {"type": "warning", "text": "此裝置已完成報到 / This device has already been used for check-in."}
-        return
-
+    # Check if already checked in
     check_in_time = employee_row['CheckInTime'].iloc[0]
     if pd.notna(check_in_time) and str(check_in_time).strip() != '':
         st.session_state.feedback_message = {"type": "warning", "text": "您已報到，無須重複操作 / You have already checked in."}
+        st.session_state.selected_employee_id = None
+        st.session_state.search_term = ""
+        st.rerun()
         return
 
     name = employee_row['Name'].iloc[0]
-    table_no = employee_row['TableNo'].iloc[0]
-    tz = pytz.timezone(TIMEZONE)
-    timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+    employee_id = employee_row['EmployeeID'].iloc[0]
+    st.info(f"正在為 **{name}** ({employee_id}) 辦理報到手續。 / Processing check-in for **{name}** ({employee_id}).")
 
-    # Update CheckInTime (assuming column 4)
-    update_cell(client, "Event_Check-in", "Sheet1", row_index, 4, timestamp)
-    # Update DeviceFingerprint (assuming column 6)
-    update_cell(client, "Event_Check-in", "Sheet1", row_index, 6, fingerprint)
+    fingerprint = st.session_state.get('device_fingerprint')
 
-    st.session_state.feedback_message = {"type": "success", "text": f"報到成功！歡迎 {name}，您的桌號在 {table_no} / Check-in successful! Welcome {name}, your table is {table_no}"}
+    # If fingerprint is not available yet, show a loading state within the disabled input
+    if not fingerprint:
+        st.text_input("設備識別碼 / Device Fingerprint", "正在獲取中... / Acquiring...", disabled=True)
+        st.warning("正在識別您的裝置，請稍候... / Identifying your device, please wait...")
+        return
+    else:
+        st.text_input("設備識別碼 / Device Fingerprint", value=fingerprint, disabled=True)
+
+
+    if st.button("確認報到 / Confirm Check-in"):
+        # Double check for duplicate fingerprint before writing to sheet
+        if 'DeviceFingerprint' in df.columns and not df[df['DeviceFingerprint'] == fingerprint].empty:
+            st.session_state.feedback_message = {"type": "error", "text": "此裝置已完成報到 / This device has already been used for check-in."}
+        else:
+            table_no = employee_row['TableNo'].iloc[0]
+            tz = pytz.timezone(TIMEZONE)
+            timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+
+            update_cell(client, "Event_Check-in", "Sheet1", row_index, 4, timestamp) # Update CheckInTime
+            update_cell(client, "Event_Check-in", "Sheet1", row_index, 6, fingerprint) # Update DeviceFingerprint
+
+            st.session_state.feedback_message = {"type": "success", "text": f"報到成功！歡迎 {name}，您的桌號在 {table_no} / Check-in successful! Welcome {name}, your table is {table_no}"}
+
+        # Reset for the next user
+        st.session_state.selected_employee_id = None
+        st.session_state.search_term = ""
+        st.rerun()
 
 
 def handle_check_out(employee_row, row_index, client):
+    # ... Check-out logic remains the same ...
     check_out_time = employee_row['CheckOutTime'].iloc[0]
     if pd.notna(check_out_time) and str(check_out_time).strip() != '':
         st.session_state.feedback_message = {"type": "warning", "text": "您已完成簽退 / You have already checked out."}
-        return
+    else:
+        tz = pytz.timezone(TIMEZONE)
+        timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+        update_cell(client, "Event_Check-in", "Sheet1", row_index, 5, timestamp)
+        st.session_state.feedback_message = {"type": "success", "text": "簽退成功，祝您有個美好的一天！ / Check-out successful, have a nice day!"}
 
-    tz = pytz.timezone(TIMEZONE)
-    timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
-    update_cell(client, "Event_Check-in", "Sheet1", row_index, 5, timestamp)
-    st.session_state.feedback_message = {"type": "success", "text": "簽退成功，祝您有個美好的一天！ / Check-out successful, have a nice day!"}
+    # Reset for the next user
+    st.session_state.selected_employee_id = None
+    st.session_state.search_term = ""
+    st.rerun()
 
 
 if __name__ == "__main__":
