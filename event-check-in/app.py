@@ -110,19 +110,18 @@ def main():
     if 'device_fingerprint' not in st.session_state:
         st.session_state.device_fingerprint = ""
 
-    # 2. Add a hidden marker div and then the text input.
-    # We will use the adjacent sibling selector in CSS/JS to target the input.
-    st.markdown('<div id="fingerprint_marker"></div>', unsafe_allow_html=True)
+    # 2. Add the text input with a data-testid for robust targeting.
     st.text_input(
-        "Device Fingerprint",
+        "Device Fingerprint", # This label is not used for selection, just for clarity
         key="device_fingerprint",
-        label_visibility="hidden"
+        label_visibility="hidden",
+        data_testid="device_fingerprint_input" # Use underscore, converted to hyphen in HTML
     )
 
-    # 3. Inject CSS to hide the div that immediately follows our marker.
+    # 3. Inject CSS to hide the text input completely.
     st.markdown("""
         <style>
-        #fingerprint_marker + div {
+        div[data-testid="device_fingerprint_input"] {
             display: none;
         }
         </style>
@@ -140,8 +139,8 @@ def main():
             const visitorId = result.visitorId;
             console.log("Device Fingerprint:", visitorId);
 
-            // Find the div immediately following the marker in the parent document, then find the input inside it.
-            const input = window.parent.document.querySelector('#fingerprint_marker + div input');
+            // Find the input element in the parent document using the data-testid
+            const input = window.parent.document.querySelector('div[data-testid="device_fingerprint_input"] input');
 
             // Check if the input is found and its value is not already set
             if (input && input.value === "") {
@@ -149,7 +148,6 @@ def main():
                 // Create and dispatch an 'input' event to notify Streamlit
                 const event = new Event('input', { bubbles: true });
                 input.dispatchEvent(event);
-            }
           })
           .catch(error => console.error(error));
       }
