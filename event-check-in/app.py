@@ -6,6 +6,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 from datetime import datetime, time
 import pytz
 import streamlit.components.v1 as components
+import json # 引入 json
 
 # --- Timezone Configuration ---
 TIMEZONE = "Asia/Taipei"
@@ -19,7 +20,7 @@ def get_gsheet():
         "type": st.secrets.gcp_service_account.type,
         "project_id": st.secrets.gcp_service_account.project_id,
         "private_key_id": st.secrets.gcp_service_account.private_key_id,
-        "private_key": st.secrets.gcp_service_account.private_key,
+        "private_key": st.secrets.ggcp_service_account.private_key,
         "client_email": st.secrets.gcp_service_account.client_email,
         "client_id": st.secrets.gcp_service_account.client_id,
         "auth_uri": st.secrets.gcp_service_account.auth_uri,
@@ -93,49 +94,67 @@ def main():
     st.set_page_config(page_title="Event Check-in/out System", initial_sidebar_state="collapsed")
     st.title("Event Check-in/out System")
 
-    # --- 【全新架構】 ---
-    # 步驟 1: 初始化 session_state
+    # --- 【最終版架構】 ---
     if 'device_fingerprint' not in st.session_state:
         st.session_state.device_fingerprint = None
 
-    # 步驟 2: 執行 JS 來獲取指紋
+    # 步驟 1: Python 準備一個 "command" payload 送給前端
+    # 我們只在 fingerprint 還不存在時才發送命令
+    command_payload = {"command": "getFingerprint"} if not st.session_state.device_fingerprint else None
+
     js_code = f'''
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
     <script>
-      function setFingerprint() {{
-        if (window.fingerprintSet) {{ return; }}
-        window.fingerprintSet = true;
-        (async () => {{
-            try {{
-                const fp = await FingerprintJS.load();
-                const result = await fp.get();
-                const visitorId = result.visitorId;
-                console.log("Device Fingerprint Captured:", visitorId);
-                Streamlit.setComponentValue({{ "fingerprint": visitorId }});
-            }} catch (error) {{
-                console.error("FingerprintJS error:", error);
-                window.fingerprintSet = false;
-            }}
-        }})();
+      function handleCommand(event) {{
+        // 監聽來自 Python 的訊息
+        const data = event.detail.args;
+        if (data && data.command === 'getFingerprint') {{
+            // 收到命令後，才執行指紋擷取
+            (async () => {{
+                try {{
+                    const fp = await FingerprintJS.load();
+                    const result = await fp.get();
+                    const visitorId = result.visitorId;
+                    console.log("Fingerprint command received and executed. Captured:", visitorId);
+                    Streamlit.setComponentValue({{ "fingerprint": visitorId }});
+                }} catch (error) {{
+                    console.error("FingerprintJS error:", error);
+                }}
+            }})();
+        }}
       }}
-      window.addEventListener('streamlit:component-ready', setFingerprint);
+
+      // 監聽 Streamlit component 的事件
+      window.addEventListener('streamlit:component-ready', function() {{
+        // 告訴 Streamlit，JS 這邊已經準備好接收命令了
+        Streamlit.events.addEventListener('message', handleCommand);
+        // 發送一個初始信號，表示JS已載入
+        Streamlit.setComponentValue({{ "status": "ready" }});
+      }});
     </script>
     '''
-    component_value = components.html(js_code, height=0)
+    # 步驟 2: 執行 JS，並將 command payload 作為參數傳入
+    component_value = components.html(js_code, height=0, key="fingerprint_component")
+    
+    # 首次渲染後，觸發一次JS命令
+    if command_payload:
+        st.components.v1.html("", height=0) # 這行是觸發更新的小技巧
+        st.experimental_rerun()
 
-    # 步驟 3: 後端接收到 JS 傳來的值後，更新 session_state 並刷新一次
+
+    # 步驟 3: 後端接收到 JS 傳來的值後，更新 session_state
     if isinstance(component_value, dict) and "fingerprint" in component_value:
         if st.session_state.device_fingerprint != component_value["fingerprint"]:
             st.session_state.device_fingerprint = component_value["fingerprint"]
-            st.rerun()
+            st.experimental_rerun()
 
-    # 步驟 4: 應用程式閘門 - 如果指紋還沒準備好，就顯示等待畫面並停止執行
+    # 步驟 4: 應用程式閘門
     if not st.session_state.device_fingerprint:
         st.info("🔄 正在初始化報到系統，請稍候...")
         st.info("🔄 Initializing the check-in system, please wait...")
-        return  # 停止執行，直到下一次 rerun
+        return
 
-    # --- Main App Logic (只有在指紋準備好後才會執行) ---
+    # --- 主應用程式邏輯 ---
     if 'authenticated' not in st.session_state: st.session_state.authenticated = False
     if 'search_term' not in st.session_state: st.session_state.search_term = ""
     if 'selected_employee_id' not in st.session_state: st.session_state.selected_employee_id = None
@@ -154,7 +173,7 @@ def main():
             if st.button("登入 / Login"):
                 if password == st.secrets.admin.password:
                     st.session_state.authenticated = True
-                    st.rerun()
+                    st.experimental_rerun()
                 else:
                     st.error("密碼錯誤 / Incorrect password")
         else:
@@ -166,7 +185,7 @@ def main():
                 save_settings(client, GOOGLE_SHEET_NAME, mode, start_time, end_time)
             if st.button("登出 / Logout"):
                 st.session_state.authenticated = False
-                st.rerun()
+                st.experimental_rerun()
 
     tz = pytz.timezone(TIMEZONE)
     now = datetime.now(tz).time()
@@ -208,11 +227,11 @@ def main():
                         for index, row in name_match.iterrows():
                             if st.button(f"{row['Name']} ({row['EmployeeID']})", key=row['EmployeeID']):
                                 st.session_state.selected_employee_id = row['EmployeeID']
-                                st.rerun()
+                                st.experimental_rerun()
                         return
                 else:
                     st.session_state.feedback_message = {"type": "error", "text": "查無此人，請確認輸入是否正確，或洽詢工作人員 / User not found, please check your input or contact staff."}
-            st.rerun()
+            st.experimental_rerun()
     else: # An employee has been selected
         employee_id = st.session_state.selected_employee_id
         employee_row = df[df['EmployeeID'] == employee_id]
@@ -231,14 +250,13 @@ def handle_check_in(df, employee_row, row_index, client):
         st.session_state.selected_employee_id = None
         st.session_state.search_term = ""
         st.session_state.device_fingerprint = None
-        st.rerun()
+        st.experimental_rerun()
         return
 
     name = employee_row['Name'].iloc[0]
     employee_id = employee_row['EmployeeID'].iloc[0]
     st.info(f"正在為 **{name}** ({employee_id}) 辦理報到手續。 / Processing check-in for **{name}** ({employee_id}).")
 
-    # 因為主程式有閘門，這裡的 fingerprint 一定會有值
     fingerprint = st.session_state.get('device_fingerprint')
     st.text_input("設備識別碼 / Device Fingerprint", value=fingerprint, disabled=True)
 
@@ -250,14 +268,12 @@ def handle_check_in(df, employee_row, row_index, client):
             tz = pytz.timezone(TIMEZONE)
             timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
             update_cell(client, "Event_Check-in", "Sheet1", row_index, 4, timestamp)
-            update_cell(client, "Event_Check-in", "Sheet1", row_index, 6, fingerprint)
+            update_cell(client, "Event-Check-in", "Sheet1", row_index, 6, fingerprint)
             st.session_state.feedback_message = {"type": "success", "text": f"報到成功！歡迎 {name}，您的桌號在 {table_no} / Check-in successful! Welcome {name}, your table is {table_no}"}
 
-        # 為下一位使用者重設狀態，但保留指紋以便快速報到
         st.session_state.selected_employee_id = None
         st.session_state.search_term = ""
-        # 注意：我們不再重設 device_fingerprint，因為同一個裝置可能會連續報到
-        st.rerun()
+        st.experimental_rerun()
 
 def handle_check_out(employee_row, row_index, client):
     """Handles the check-out process for a selected employee."""
@@ -267,12 +283,12 @@ def handle_check_out(employee_row, row_index, client):
     else:
         tz = pytz.timezone(TIMEZONE)
         timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
-        update_cell(client, "Event_Check-in", "Sheet1", row_index, 5, timestamp)
+        update_cell(client, "Event-Check-in", "Sheet1", row_index, 5, timestamp)
         st.session_state.feedback_message = {"type": "success", "text": "簽退成功，祝您有個美好的一天！ / Check-out successful, have a nice day!"}
 
     st.session_state.selected_employee_id = None
     st.session_state.search_term = ""
-    st.rerun()
+    st.experimental_rerun()
 
 if __name__ == "__main__":
     main()
