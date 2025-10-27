@@ -93,36 +93,43 @@ def main():
     st.set_page_config(page_title="Event Check-in/out System", initial_sidebar_state="collapsed")
     st.title("Event Check-in/out System")
 
-    # --- 【全新且穩定的】Device Fingerprint 處理 ---
+    # --- Device Fingerprint Handling ---
     if 'device_fingerprint' not in st.session_state:
         st.session_state.device_fingerprint = None
 
+    # 【錯誤修正】使用 streamlit:component-ready 事件監聽器來確保 Streamlit 物件已定義
     js_code = f'''
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
     <script>
-      async function setFingerprint() {{
+      function setFingerprint() {{
         // 使用 window 物件上的旗標，確保這個複雜的函式只執行一次
-        if (!window.fingerprintSet) {{
-            window.fingerprintSet = true; // 先設定旗標
+        if (window.fingerprintSet) {{
+            return;
+        }}
+        window.fingerprintSet = true;
+
+        (async () => {{
             try {{
                 const fp = await FingerprintJS.load();
                 const result = await fp.get();
                 const visitorId = result.visitorId;
                 console.log("Device Fingerprint Captured:", visitorId);
-                // 直接將值傳送給 Streamlit 後端
                 Streamlit.setComponentValue({{ "fingerprint": visitorId }});
             }} catch (error) {{
                 console.error("FingerprintJS error:", error);
                 window.fingerprintSet = false; // 如果失敗，允許重試
             }}
-        }}
+        }})();
       }}
-      setFingerprint();
+
+      // 監聽 Streamlit 的 component-ready 事件，確保 Streamlit 物件可用
+      window.addEventListener('streamlit:component-ready', function() {{
+          setFingerprint();
+      }});
     </script>
     '''
     component_value = components.html(js_code, height=0)
 
-    # 【錯誤修正】使用更安全的方式檢查 component_value
     if isinstance(component_value, dict) and "fingerprint" in component_value:
         if st.session_state.device_fingerprint != component_value["fingerprint"]:
             st.session_state.device_fingerprint = component_value["fingerprint"]
