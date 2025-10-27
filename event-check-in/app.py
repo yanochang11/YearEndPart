@@ -94,16 +94,12 @@ def main():
     st.title("Event Check-in/out System")
 
     # --- Device Fingerprint Handling ---
-    if 'device_fingerprint' not in st.session_state:
-        st.session_state.device_fingerprint = ""
-
-    # Hidden input field that will be populated by our JavaScript
+    # We still use the same JS mechanism to get the fingerprint
     st.text_input("Device Fingerprint", key="device_fingerprint_hidden", label_visibility="hidden",
                   placeholder="__fingerprint_placeholder__")
 
     st.markdown("""<style>input[placeholder="__fingerprint_placeholder__"] { display: none; }</style>""", unsafe_allow_html=True)
 
-    # JavaScript to get the fingerprint and update the hidden Streamlit input
     js_code = '''
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
     <script>
@@ -124,17 +120,16 @@ def main():
                 if (input) {
                     if(input.value === "") {
                         input.value = visitorId;
-                        // Dispatch event to notify Streamlit of the change
                         const event = new Event('input', { bubbles: true });
                         input.dispatchEvent(event);
                         console.log('Fingerprint set successfully.');
                     }
-                    clearInterval(intervalId); // Stop polling once successful
+                    clearInterval(intervalId);
                 } else if (attempts >= maxAttempts) {
-                    clearInterval(intervalId); // Stop polling after timeout
+                    clearInterval(intervalId);
                     console.error('Failed to find the fingerprint input field.');
                 }
-            }, 100); // Check every 100ms
+            }, 100);
           })
           .catch(error => console.error(error));
       }
@@ -143,11 +138,11 @@ def main():
     '''
     components.html(js_code, height=0)
 
-    # 【關鍵修正 1】: 這段邏輯會在 JavaScript 更新隱藏欄位後，觸發一次 Python 的重新整理
-    # 這能確保 Python 狀態與前端同步
-    if st.session_state.device_fingerprint_hidden and not st.session_state.device_fingerprint:
-        st.session_state.device_fingerprint = st.session_state.device_fingerprint_hidden
-        st.rerun()
+    # We read from the hidden field into our main state variable
+    if 'device_fingerprint' not in st.session_state:
+        st.session_state.device_fingerprint = ""
+    st.session_state.device_fingerprint = st.session_state.get('device_fingerprint_hidden', "")
+
 
     # --- Main App Logic ---
     if 'authenticated' not in st.session_state: st.session_state.authenticated = False
@@ -253,30 +248,29 @@ def handle_check_in(df, employee_row, row_index, client):
 
     fingerprint = st.session_state.get('device_fingerprint')
 
-    # 【關鍵修正 2】: 如果 Python 執行時發現指紋是空的，就顯示等待訊息並直接 `return`
-    # 它不會卡住，而是等待上面【關鍵修正 1】中的 `st.rerun()` 來觸發下一次檢查
+    # 【關鍵修正】: 根據 fingerprint 是否存在，決定顯示的內容
     if not fingerprint:
-        st.text_input("設備識別碼 / Device Fingerprint", "正在獲取中... / Acquiring...", disabled=True)
         st.warning("正在識別您的裝置，請稍候... / Identifying your device, please wait...")
-        return
+        # 提供一個手動刷新按鈕，作為最可靠的同步方式
+        if st.button("🔄 重新整理以載入識別碼 / Refresh to load ID"):
+            st.rerun()
+    else:
+        # 如果成功載入，則顯示識別碼和確認按鈕
+        st.text_input("設備識別碼 / Device Fingerprint", value=fingerprint, disabled=True)
+        if st.button("✅ 確認報到 / Confirm Check-in"):
+            if 'DeviceFingerprint' in df.columns and not df[df['DeviceFingerprint'] == fingerprint].empty:
+                st.session_state.feedback_message = {"type": "error", "text": "此裝置已完成報到 / This device has already been used for check-in."}
+            else:
+                table_no = employee_row['TableNo'].iloc[0]
+                tz = pytz.timezone(TIMEZONE)
+                timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+                update_cell(client, "Event_Check-in", "Sheet1", row_index, 4, timestamp)
+                update_cell(client, "Event_Check-in", "Sheet1", row_index, 6, fingerprint)
+                st.session_state.feedback_message = {"type": "success", "text": f"報到成功！歡迎 {name}，您的桌號在 {table_no} / Check-in successful! Welcome {name}, your table is {table_no}"}
 
-    # 如果程式能執行到這裡，代表指紋已經成功獲取
-    st.text_input("設備識別碼 / Device Fingerprint", value=fingerprint, disabled=True)
-
-    if st.button("確認報到 / Confirm Check-in"):
-        if 'DeviceFingerprint' in df.columns and not df[df['DeviceFingerprint'] == fingerprint].empty:
-            st.session_state.feedback_message = {"type": "error", "text": "此裝置已完成報到 / This device has already been used for check-in."}
-        else:
-            table_no = employee_row['TableNo'].iloc[0]
-            tz = pytz.timezone(TIMEZONE)
-            timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
-            update_cell(client, "Event_Check-in", "Sheet1", row_index, 4, timestamp)
-            update_cell(client, "Event_Check-in", "Sheet1", row_index, 6, fingerprint)
-            st.session_state.feedback_message = {"type": "success", "text": f"報到成功！歡迎 {name}，您的桌號在 {table_no} / Check-in successful! Welcome {name}, your table is {table_no}"}
-
-        st.session_state.selected_employee_id = None
-        st.session_state.search_term = ""
-        st.rerun()
+            st.session_state.selected_employee_id = None
+            st.session_state.search_term = ""
+            st.rerun()
 
 def handle_check_out(employee_row, row_index, client):
     """Handles the check-out process for a selected employee."""
