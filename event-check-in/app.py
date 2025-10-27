@@ -4,8 +4,8 @@ from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 from datetime import datetime, time, timedelta
-from streamlit_cookies_manager import EncryptedCookieManager
 import pytz
+import streamlit.components.v1 as components
 
 # --- Timezone Configuration ---
 TIMEZONE = "Asia/Taipei"
@@ -105,11 +105,41 @@ def main():
     st.set_page_config(page_title="Event Check-in/out System", initial_sidebar_state="collapsed")
     st.title("Event Check-in/out System")
 
-    cookies = EncryptedCookieManager(
-        password=st.secrets.cookies.password,
-    )
-    if not cookies.ready():
-        st.stop()
+    # --- Device Fingerprint ---
+    if 'device_fingerprint' not in st.session_state:
+        st.session_state.device_fingerprint = ""
+
+    # Create a hidden container for the text input.
+    # The text_input to store the fingerprint, bound to session_state.
+    # The JavaScript below will populate this input.
+    st.markdown('<div id="fingerprint-container" style="display: none;">', unsafe_allow_html=True)
+    st.text_input("Device Fingerprint", key="device_fingerprint", label_visibility="hidden")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # The JavaScript to get the fingerprint and inject it into the text_input
+    js_code = '''
+    <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
+    <script>
+      function setFingerprint() {
+        const fpPromise = FingerprintJS.load();
+        fpPromise
+          .then(fp => fp.get())
+          .then(result => {
+            const visitorId = result.visitorId;
+            const input = window.parent.document.querySelector('div[id="fingerprint-container"] input');
+            if (input && input.value === "") {
+                input.value = visitorId;
+                const event = new Event('input', { bubbles: true });
+                input.dispatchEvent(event);
+            }
+          })
+          .catch(error => console.error(error));
+      }
+      // Set a timeout to allow the DOM to render.
+      setTimeout(setFingerprint, 500);
+    </script>
+    '''
+    components.html(js_code, height=0)
 
     # Initialize session state for user-specific data
     if 'authenticated' not in st.session_state:
@@ -218,7 +248,7 @@ def main():
             row_index = employee_row.index[0] + 2
 
             if settings['mode'] == "Check-in":
-                handle_check_in(employee_row, row_index, client, cookies)
+                handle_check_in(df, employee_row, row_index, client)
             else: # Check-out
                 handle_check_out(employee_row, row_index, client)
 
@@ -228,8 +258,14 @@ def main():
             st.rerun()
 
 
-def handle_check_in(employee_row, row_index, client, cookies):
-    if 'event_checked_in' in cookies:
+def handle_check_in(df, employee_row, row_index, client):
+    fingerprint = st.session_state.get('device_fingerprint')
+    if not fingerprint:
+        st.session_state.feedback_message = {"type": "error", "text": "無法識別您的裝置，請重新整理頁面再試一次 / Could not identify your device. Please refresh the page and try again."}
+        return
+
+    # Check if 'DeviceFingerprint' column exists and if the fingerprint is already in it
+    if 'DeviceFingerprint' in df.columns and not df[df['DeviceFingerprint'] == fingerprint].empty:
         st.session_state.feedback_message = {"type": "warning", "text": "此裝置已完成報到 / This device has already been used for check-in."}
         return
 
@@ -243,10 +279,10 @@ def handle_check_in(employee_row, row_index, client, cookies):
     tz = pytz.timezone(TIMEZONE)
     timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
 
+    # Update CheckInTime (assuming column 4)
     update_cell(client, "Event_Check-in", "Sheet1", row_index, 4, timestamp)
-
-    cookies['event_checked_in'] = "true"
-    cookies.save()
+    # Update DeviceFingerprint (assuming column 6)
+    update_cell(client, "Event_Check-in", "Sheet1", row_index, 6, fingerprint)
 
     st.session_state.feedback_message = {"type": "success", "text": f"報到成功！歡迎 {name}，您的桌號在 {table_no} / Check-in successful! Welcome {name}, your table is {table_no}"}
 
