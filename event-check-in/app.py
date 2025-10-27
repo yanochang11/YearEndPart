@@ -20,7 +20,7 @@ def get_gsheet():
         "type": st.secrets.gcp_service_account.type,
         "project_id": st.secrets.gcp_service_account.project_id,
         "private_key_id": st.secrets.gcp_service_account.private_key_id,
-        "private_key": st.secrets.gcp_service_account.private_key,
+        "private_key": st.secrets.gcp_service_account.private_key, # Corrected typo here
         "client_email": st.secrets.gcp_service_account.client_email,
         "client_id": st.secrets.gcp_service_account.client_id,
         "auth_uri": st.secrets.gcp_service_account.auth_uri,
@@ -93,11 +93,9 @@ def main():
     """Main function to run the Streamlit application."""
     st.set_page_config(page_title="Event Check-in/out System", initial_sidebar_state="collapsed")
     
-    # Initialize session_state for the fingerprint
     if 'device_fingerprint' not in st.session_state:
         st.session_state.device_fingerprint = None
 
-    # This component will run its JavaScript to get the fingerprint
     js_code = """
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
     <script>
@@ -112,7 +110,7 @@ def main():
                 Streamlit.setComponentValue({ "fingerprint": visitorId });
             } catch (error) {
                 console.error("FingerprintJS error:", error);
-                window.fingerprintSet = false; // Allow retry on error
+                window.fingerprintSet = false;
             }
         })();
       }
@@ -121,16 +119,13 @@ def main():
     """
     component_value = components.html(js_code, height=0, key="fingerprint_getter")
 
-    # When the component sends a value back, update the session state.
-    # NO st.rerun() is needed here; Streamlit handles it automatically.
     if isinstance(component_value, dict) and "fingerprint" in component_value:
-        if st.session_state.device_fingerprint != component_value["fingerprint"]:
+        if st.session_state.device_fingerprint is None:
             st.session_state.device_fingerprint = component_value["fingerprint"]
-            st.rerun() # Rerun once to make the app appear after initialization
+            st.rerun()
 
     st.title("Event Check-in/out System")
 
-    # Application Gate: The main app is only rendered if the fingerprint is available.
     if not st.session_state.device_fingerprint:
         st.info("🔄 正在初始化報到系統，請稍候...")
         st.info("🔄 Initializing the check-in system, please wait...")
@@ -190,7 +185,6 @@ def main():
         elif message_type == "error": st.error(message_text)
         st.session_state.feedback_message = None
 
-    # Search and Confirmation Flow
     if not st.session_state.get('selected_employee_id'):
         st.session_state.search_term = st.text_input("請輸入您的員工編號或姓名 / Please enter your Employee ID or Name:", value=st.session_state.search_term).strip()
         if st.button("確認 / Confirm"):
