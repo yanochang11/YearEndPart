@@ -119,10 +119,19 @@ def main():
     )
 
     # 3. Inject CSS to hide the input based on its unique placeholder.
+    # We use opacity and positioning to hide it, as 'display: none' can prevent event handling.
     st.markdown("""
         <style>
         input[placeholder="__fingerprint_placeholder__"] {
-            display: none;
+            position: absolute;
+            opacity: 0;
+            width: 0;
+            height: 0;
+            border: none;
+            padding: 0;
+            margin: 0;
+            top: -9999px;
+            left: -9999px;
         }
         </style>
     """, unsafe_allow_html=True)
