@@ -92,47 +92,47 @@ def save_settings(client, sheet_name, mode, start_time, end_time):
 def main():
     """Main function to run the Streamlit application."""
     st.set_page_config(page_title="Event Check-in/out System", initial_sidebar_state="collapsed")
-    
+
+    # --- Device Fingerprint Logic ---
     if 'device_fingerprint' not in st.session_state:
         st.session_state.device_fingerprint = None
 
-    js_code = """
-    <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
-    <script>
-      function setFingerprint() {
-        if (window.fingerprintSet) { return; }
-        window.fingerprintSet = true;
-        (async () => {
+    # Only attempt to get a fingerprint if we don't already have one.
+    if not st.session_state.device_fingerprint:
+        js_code = """
+        <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
+        <script>
+          // Function to get fingerprint and send it to Streamlit
+          async function setFingerprint() {
             try {
-                const fp = await FingerprintJS.load();
-                const result = await fp.get();
-                const visitorId = result.visitorId;
-                Streamlit.setComponentValue({ "fingerprint": visitorId });
+              const fp = await FingerprintJS.load();
+              const result = await fp.get();
+              const visitorId = result.visitorId;
+              Streamlit.setComponentValue({ "fingerprint": visitorId });
             } catch (error) {
-                console.error("FingerprintJS error:", error);
-                window.fingerprintSet = false;
+              console.error("FingerprintJS error:", error);
+              Streamlit.setComponentValue({ "fingerprint": "error" });
             }
-        })();
-      }
-      window.addEventListener('streamlit:component-ready', setFingerprint);
-    </script>
-    """
-    component_value = components.html(js_code, height=0, key="fingerprint_getter")
+          }
 
-    # Passively update the state. Let Streamlit's natural rerun handle the UI update.
-    # This avoids the forceful rerun that was causing the TypeError.
-    if isinstance(component_value, dict) and "fingerprint" in component_value:
-        if st.session_state.device_fingerprint is None:
+          // Ensure the script runs after the component is ready
+          window.addEventListener('streamlit:component-ready', setFingerprint);
+        </script>
+        """
+        component_value = components.html(js_code, height=0, key="fingerprint_getter")
+
+        # If the component returns a value, store it and trigger a single rerun
+        if isinstance(component_value, dict) and "fingerprint" in component_value:
             st.session_state.device_fingerprint = component_value["fingerprint"]
-            # A single, gentle rerun is safe here ONLY when the value is first set.
             st.rerun()
 
     st.title("Event Check-in/out System")
 
+    # Display an initializing message and halt further script execution until the fingerprint is ready
     if not st.session_state.device_fingerprint:
         st.info("🔄 正在初始化報到系統，請稍候...")
         st.info("🔄 Initializing the check-in system, please wait...")
-        return
+        return # Use return or st.stop() to halt execution
 
     # --- Main Application Logic ---
     if 'authenticated' not in st.session_state: st.session_state.authenticated = False
