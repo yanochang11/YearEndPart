@@ -143,7 +143,8 @@ def main():
     '''
     components.html(js_code, height=0)
 
-    # **CRITICAL FIX**: This logic syncs the state from JS to Python and forces a rerun
+    # 【關鍵修正 1】: 這段邏輯會在 JavaScript 更新隱藏欄位後，觸發一次 Python 的重新整理
+    # 這能確保 Python 狀態與前端同步
     if st.session_state.device_fingerprint_hidden and not st.session_state.device_fingerprint:
         st.session_state.device_fingerprint = st.session_state.device_fingerprint_hidden
         st.rerun()
@@ -252,12 +253,14 @@ def handle_check_in(df, employee_row, row_index, client):
 
     fingerprint = st.session_state.get('device_fingerprint')
 
+    # 【關鍵修正 2】: 如果 Python 執行時發現指紋是空的，就顯示等待訊息並直接 `return`
+    # 它不會卡住，而是等待上面【關鍵修正 1】中的 `st.rerun()` 來觸發下一次檢查
     if not fingerprint:
         st.text_input("設備識別碼 / Device Fingerprint", "正在獲取中... / Acquiring...", disabled=True)
         st.warning("正在識別您的裝置，請稍候... / Identifying your device, please wait...")
-        return # Exit this run, the rerun in main() will eventually provide the fingerprint
+        return
 
-    # If we are here, the fingerprint is available
+    # 如果程式能執行到這裡，代表指紋已經成功獲取
     st.text_input("設備識別碼 / Device Fingerprint", value=fingerprint, disabled=True)
 
     if st.button("確認報到 / Confirm Check-in"):
