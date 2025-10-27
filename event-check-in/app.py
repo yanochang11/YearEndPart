@@ -15,11 +15,12 @@ TIMEZONE = "Asia/Taipei"
 def get_gsheet():
     """Establishes a connection to the Google Sheet using cached credentials."""
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    # All secrets are fetched from st.secrets
     creds_dict = {
         "type": st.secrets.gcp_service_account.type,
         "project_id": st.secrets.gcp_service_account.project_id,
         "private_key_id": st.secrets.gcp_service_account.private_key_id,
-        "private_key": st.secrets.gcp_service_account.private_key, # Corrected typo here
+        "private_key": st.secrets.gcp_service_account.private_key,
         "client_email": st.secrets.gcp_service_account.client_email,
         "client_id": st.secrets.gcp_service_account.client_id,
         "auth_uri": st.secrets.gcp_service_account.auth_uri,
@@ -91,52 +92,51 @@ def save_settings(client, sheet_name, mode, start_time, end_time):
 def main():
     """Main function to run the Streamlit application."""
     st.set_page_config(page_title="Event Check-in/out System", initial_sidebar_state="collapsed")
-    st.title("Event Check-in/out System")
-
-    # --- Simplified and Robust Fingerprint Handling ---
+    
+    # Initialize session_state for the fingerprint
     if 'device_fingerprint' not in st.session_state:
         st.session_state.device_fingerprint = None
 
-    js_code = f'''
+    # This component will run its JavaScript to get the fingerprint
+    js_code = """
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
     <script>
-      function setFingerprint() {{
-        // Use a flag on the window object to ensure this runs only once.
-        if (window.fingerprintSet) {{ return; }}
+      function setFingerprint() {
+        if (window.fingerprintSet) { return; }
         window.fingerprintSet = true;
-
-        (async () => {{
-            try {{
+        (async () => {
+            try {
                 const fp = await FingerprintJS.load();
                 const result = await fp.get();
                 const visitorId = result.visitorId;
-                console.log("Fingerprint Captured:", visitorId);
-                Streamlit.setComponentValue({{ "fingerprint": visitorId }});
-            }} catch (error) {{
+                Streamlit.setComponentValue({ "fingerprint": visitorId });
+            } catch (error) {
                 console.error("FingerprintJS error:", error);
                 window.fingerprintSet = false; // Allow retry on error
-            }}
-        }})();
-      }}
-
-      // Listen for Streamlit's official 'component-ready' event.
+            }
+        })();
+      }
       window.addEventListener('streamlit:component-ready', setFingerprint);
     </script>
-    '''
+    """
     component_value = components.html(js_code, height=0, key="fingerprint_getter")
 
+    # When the component sends a value back, update the session state.
+    # NO st.rerun() is needed here; Streamlit handles it automatically.
     if isinstance(component_value, dict) and "fingerprint" in component_value:
         if st.session_state.device_fingerprint != component_value["fingerprint"]:
             st.session_state.device_fingerprint = component_value["fingerprint"]
-            st.rerun()
+            st.rerun() # Rerun once to make the app appear after initialization
 
-    # Application Gate: Do not proceed until the fingerprint is ready.
+    st.title("Event Check-in/out System")
+
+    # Application Gate: The main app is only rendered if the fingerprint is available.
     if not st.session_state.device_fingerprint:
         st.info("🔄 正在初始化報到系統，請稍候...")
         st.info("🔄 Initializing the check-in system, please wait...")
         return
 
-    # --- Main Application Logic (runs only after fingerprint is secured) ---
+    # --- Main Application Logic ---
     if 'authenticated' not in st.session_state: st.session_state.authenticated = False
     if 'search_term' not in st.session_state: st.session_state.search_term = ""
     if 'selected_employee_id' not in st.session_state: st.session_state.selected_employee_id = None
@@ -190,7 +190,7 @@ def main():
         elif message_type == "error": st.error(message_text)
         st.session_state.feedback_message = None
 
-    # --- Search and Confirmation Flow ---
+    # Search and Confirmation Flow
     if not st.session_state.get('selected_employee_id'):
         st.session_state.search_term = st.text_input("請輸入您的員工編號或姓名 / Please enter your Employee ID or Name:", value=st.session_state.search_term).strip()
         if st.button("確認 / Confirm"):
@@ -214,7 +214,7 @@ def main():
                 else:
                     st.session_state.feedback_message = {"type": "error", "text": "查無此人，請確認輸入是否正確，或洽詢工作人員 / User not found, please check your input or contact staff."}
             st.rerun()
-    else: # An employee has been selected
+    else:
         employee_id = st.session_state.selected_employee_id
         employee_row = df[df['EmployeeID'] == employee_id]
         if not employee_row.empty:
