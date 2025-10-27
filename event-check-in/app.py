@@ -55,7 +55,7 @@ def update_cell(client, sheet_name, worksheet_name, row, col, value):
     try:
         sheet = client.open(sheet_name).worksheet(worksheet_name)
         sheet.update_cell(row, col, value)
-        get_data.clear() # Clear data cache to reflect the update
+        get_data.clear()
     except Exception as e:
         st.error(f"Failed to update Google Sheet: {e}")
 
@@ -83,7 +83,7 @@ def save_settings(client, sheet_name, mode, start_time, end_time):
     try:
         settings_sheet = client.open(sheet_name).worksheet("Settings")
         settings_sheet.update('A2:C2', [[mode, start_time.strftime('%H:%M'), end_time.strftime('%H:%M')]])
-        get_settings.clear() # Clear settings cache after saving
+        get_settings.clear()
         st.success("設定已儲存 / Settings saved successfully!")
     except Exception as e:
         st.error(f"儲存設定失敗 / Failed to save settings: {e}")
@@ -93,55 +93,15 @@ def main():
     st.set_page_config(page_title="Event Check-in/out System", initial_sidebar_state="collapsed")
     st.title("Event Check-in/out System")
 
-    # --- Device Fingerprint Handling ---
-    # We still use the same JS mechanism to get the fingerprint
-    st.text_input("Device Fingerprint", key="device_fingerprint_hidden", label_visibility="hidden",
-                  placeholder="__fingerprint_placeholder__")
-
-    st.markdown("""<style>input[placeholder="__fingerprint_placeholder__"] { display: none; }</style>""", unsafe_allow_html=True)
-
-    js_code = '''
-    <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
-    <script>
-      function setFingerprint() {
-        const fpPromise = FingerprintJS.load();
-        fpPromise
-          .then(fp => fp.get())
-          .then(result => {
-            const visitorId = result.visitorId;
-            console.log("Device Fingerprint:", visitorId);
-
-            let attempts = 0;
-            const maxAttempts = 50; // Try for 5 seconds
-            const intervalId = setInterval(() => {
-                attempts++;
-                const input = window.parent.document.querySelector('input[placeholder="__fingerprint_placeholder__"]');
-
-                if (input) {
-                    if(input.value === "") {
-                        input.value = visitorId;
-                        const event = new Event('input', { bubbles: true });
-                        input.dispatchEvent(event);
-                        console.log('Fingerprint set successfully.');
-                    }
-                    clearInterval(intervalId);
-                } else if (attempts >= maxAttempts) {
-                    clearInterval(intervalId);
-                    console.error('Failed to find the fingerprint input field.');
-                }
-            }, 100);
-          })
-          .catch(error => console.error(error));
-      }
-      setFingerprint();
-    </script>
-    '''
-    components.html(js_code, height=0)
-
-    # We read from the hidden field into our main state variable
-    if 'device_fingerprint' not in st.session_state:
-        st.session_state.device_fingerprint = ""
-    st.session_state.device_fingerprint = st.session_state.get('device_fingerprint_hidden', "")
+    # --- 【關鍵修正 1】: Python 從 URL 讀取 fingerprint ---
+    # 檢查 URL 中是否已經有 fingerprint 參數
+    if 'fingerprint' in st.query_params:
+        # 如果有，就存到 session_state 中
+        if 'device_fingerprint' not in st.session_state or st.session_state.device_fingerprint is None:
+            st.session_state.device_fingerprint = st.query_params['fingerprint']
+    else:
+        # 如果 URL 中沒有，則初始化為 None
+        st.session_state.device_fingerprint = None
 
 
     # --- Main App Logic ---
@@ -248,14 +208,32 @@ def handle_check_in(df, employee_row, row_index, client):
 
     fingerprint = st.session_state.get('device_fingerprint')
 
-    # 【關鍵修正】: 根據 fingerprint 是否存在，決定顯示的內容
+    # 【關鍵修正 2】: 根據 fingerprint 是否存在，決定顯示 JS 或是確認按鈕
     if not fingerprint:
-        st.warning("正在識別您的裝置，請稍候... / Identifying your device, please wait...")
-        # 提供一個手動刷新按鈕，作為最可靠的同步方式
-        if st.button("🔄 重新整理以載入識別碼 / Refresh to load ID"):
-            st.rerun()
+        # 如果 state 中沒有 fingerprint，就執行 JS 來獲取它
+        st.warning("正在識別您的裝置，請稍候...頁面將會自動刷新。 / Identifying your device, please wait... The page will refresh automatically.")
+        
+        js_code = '''
+        <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
+        <script>
+          // Only run if the fingerprint parameter is not already in the URL
+          if (!window.location.search.includes('fingerprint=')) {
+            const fpPromise = FingerprintJS.load();
+            fpPromise
+              .then(fp => fp.get())
+              .then(result => {
+                const visitorId = result.visitorId;
+                console.log("Device Fingerprint:", visitorId);
+                // Reload the page with the fingerprint as a query parameter
+                window.location.search += (window.location.search ? '&' : '') + 'fingerprint=' + visitorId;
+              })
+              .catch(error => console.error(error));
+          }
+        </script>
+        '''
+        components.html(js_code, height=0)
     else:
-        # 如果成功載入，則顯示識別碼和確認按鈕
+        # 如果 state 中已經有 fingerprint，就顯示它並提供報到按鈕
         st.text_input("設備識別碼 / Device Fingerprint", value=fingerprint, disabled=True)
         if st.button("✅ 確認報到 / Confirm Check-in"):
             if 'DeviceFingerprint' in df.columns and not df[df['DeviceFingerprint'] == fingerprint].empty:
@@ -270,7 +248,9 @@ def handle_check_in(df, employee_row, row_index, client):
 
             st.session_state.selected_employee_id = None
             st.session_state.search_term = ""
-            st.rerun()
+            # 清除 URL 參數並刷新，準備給下一位使用者
+            st.query_params.clear()
+
 
 def handle_check_out(employee_row, row_index, client):
     """Handles the check-out process for a selected employee."""
@@ -280,7 +260,7 @@ def handle_check_out(employee_row, row_index, client):
     else:
         tz = pytz.timezone(TIMEZONE)
         timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
-        update_cell(client, "Event_Check-in", "Sheet1", row_index, 5, timestamp)
+        update_cell(client, "Event-Check-in", "Sheet1", row_index, 5, timestamp)
         st.session_state.feedback_message = {"type": "success", "text": "簽退成功，祝您有個美好的一天！ / Check-out successful, have a nice day!"}
 
     st.session_state.selected_employee_id = None
