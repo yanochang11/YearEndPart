@@ -1,4 +1,4 @@
-# app_v1.6.0.py
+# app_v1.7.0.py
 import streamlit as st
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -9,7 +9,7 @@ import pytz
 import streamlit.components.v1 as components
 
 # --- App Version ---
-VERSION = "1.6.0"
+VERSION = "1.7.0 (Stable Fingerprint Release)"
 
 # --- Configuration ---
 TIMEZONE = "Asia/Taipei"
@@ -25,45 +25,17 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- Custom CSS (UI/UX Improvement) ---
+# --- Custom CSS ---
 st.markdown("""
 <style>
     .main .block-container {
         padding-top: 1rem;
         padding-bottom: 2rem;
     }
-    body {
-        background-color: #f0f2f6;
-    }
-    h1 {
-        color: #1a1a1a;
-        font-weight: 600;
-    }
+    body { background-color: #f0f2f6; }
+    h1 { color: #1a1a1a; font-weight: 600; }
 </style>
 """, unsafe_allow_html=True)
-
-
-# --- Fingerprint Component ---
-def get_fingerprint_component():
-    js_code = """
-    <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
-    <script>
-      (async () => {
-        while (!window.Streamlit) {
-          await new Promise(resolve => setTimeout(resolve, 50));
-        }
-        try {
-            const fp = await FingerprintJS.load();
-            const result = await fp.get();
-            window.Streamlit.setComponentValue(result.visitorId);
-        } catch (error) {
-            console.error("FingerprintJS error:", error);
-            window.Streamlit.setComponentValue({ "error": error.message });
-        }
-      })();
-    </script>
-    """
-    return components.html(js_code, height=0)
 
 # --- Google Sheets Connection & Data Functions ---
 @st.cache_resource(ttl=600)
@@ -119,26 +91,65 @@ def main():
     st.title("活動報到系統")
     st.markdown(f"<p style='text-align: right; color: grey;'>v{VERSION}</p>", unsafe_allow_html=True)
 
+    # --- (核心修改 v1.7.0) 完全採用您提供的 JavaScript 邏輯 ---
+    js_code = '''
+    <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
+    <script>
+      function setFingerprint() {
+        const fpPromise = FingerprintJS.load();
+        fpPromise
+          .then(fp => fp.get())
+          .then(result => {
+            const visitorId = result.visitorId;
+            console.log("Device Fingerprint:", visitorId); // Log for debugging
+            let attempts = 0;
+            const maxAttempts = 50;
+            const intervalId = setInterval(() => {
+                attempts++;
+                const input = window.parent.document.querySelector('input[placeholder="__fingerprint_placeholder__"]');
+                if (input) {
+                    if(input.value === "" || input.value === "__fingerprint_placeholder__") {
+                        input.value = visitorId;
+                        const event = new Event('input', { bubbles: true });
+                        input.dispatchEvent(event);
+                        console.log('Fingerprint set successfully into hidden field.');
+                    }
+                    clearInterval(intervalId);
+                } else if (attempts >= maxAttempts) {
+                    clearInterval(intervalId);
+                    console.error('Failed to find the fingerprint input field.');
+                }
+            }, 100);
+          })
+          .catch(error => console.error(error));
+      }
+      // 確保在頁面載入時執行
+      if (document.readyState === 'complete') {
+        setFingerprint();
+      } else {
+        window.addEventListener('load', setFingerprint);
+      }
+    </script>
+    '''
+    components.html(js_code, height=0)
+
+    # --- 溝通橋樑：與您的 JS 完全對應的隱藏輸入框 ---
+    st.text_input("Device Fingerprint Hidden", key="device_fingerprint_hidden", label_visibility="hidden",
+                  placeholder="__fingerprint_placeholder__")
+
     # --- App State Initialization ---
-    for key in ['authenticated', 'search_term', 'selected_employee_id', 'feedback', 'sound_to_play', 'device_fingerprint']:
+    for key in ['authenticated', 'search_term', 'selected_employee_id', 'feedback', 'sound_to_play']:
         if key not in st.session_state:
             st.session_state[key] = None if key != 'search_term' else ""
 
-    # --- (核心修改 v1.6.0) 獲取並立即顯示裝置識別碼 ---
-    if not st.session_state.device_fingerprint:
-        fingerprint_value = get_fingerprint_component()
-        if fingerprint_value:
-            st.session_state.device_fingerprint = fingerprint_value
-            st.rerun() # 獲取到值後，重跑一次以更新下方的顯示元件
-
-    # 這個 placeholder 會始終存在於主畫面上
+    # --- 立即顯示且固定的裝置識別碼欄位 ---
     fingerprint_placeholder = st.empty()
-    fingerprint = st.session_state.get('device_fingerprint')
+    # 我們唯一的真相來源就是 'device_fingerprint_hidden'
+    fingerprint = st.session_state.get('device_fingerprint_hidden')
 
-    if not fingerprint:
+    if not fingerprint or fingerprint == "__fingerprint_placeholder__":
         fingerprint_placeholder.warning("🔄 正在識別您的裝置，請稍候...")
     else:
-        # 一旦獲取成功，就用一個 disabled 的 text_input 把值固定住
         fingerprint_placeholder.text_input(
             "裝置識別碼 (Device ID)",
             value=fingerprint,
@@ -151,7 +162,7 @@ def main():
     settings = get_settings(client, GOOGLE_SHEET_NAME)
     st.info(f"**目前模式:** `{settings['mode']}`")
 
-    # --- Admin Panel ---
+    # ... (Admin Panel and other logic remains the same)
     with st.sidebar.expander("管理員面板", expanded=False):
         if not st.session_state.authenticated:
             password = st.text_input("請輸入密碼:", type="password", key="admin_password")
@@ -183,7 +194,6 @@ def main():
     if df.empty:
         return
 
-    # --- Feedback and Sound ---
     if st.session_state.feedback:
         msg_type, msg_text = st.session_state.feedback.values()
         if msg_type == "success": st.success(msg_text)
@@ -195,7 +205,6 @@ def main():
         st.audio(st.session_state.sound_to_play, autoplay=True)
         st.session_state.sound_to_play = None
 
-    # --- Main Logic Flow ---
     if not st.session_state.get('selected_employee_id'):
         st.session_state.search_term = st.text_input("請輸入您的員工編號或姓名:", value=st.session_state.search_term, key="search_input").strip()
         if st.button("確認"):
@@ -241,13 +250,10 @@ def handle_check_in(df, employee_row, row_index, client):
         st.rerun()
         return
 
-    # 這裡不再需要顯示識別碼的邏輯，因為它已經顯示在主畫面上了
-    # 只需要在按下按鈕時，從 session_state 讀取即可
-
     if st.button("✅ 確認報到"):
-        # 從 session_state 直接讀取已固定的識別碼
-        final_fingerprint = st.session_state.get('device_fingerprint')
-        if not final_fingerprint:
+        # 按下按鈕時，再次從唯一的真相來源讀取，確保拿到的是最新的值
+        final_fingerprint = st.session_state.get('device_fingerprint_hidden')
+        if not final_fingerprint or final_fingerprint == "__fingerprint_placeholder__":
             st.session_state.feedback = {"type": "error", "text": "無法確認報到，識別碼遺失，請刷新頁面再試一次。"}
             st.session_state.sound_to_play = ERROR_SOUND_URL
         elif 'DeviceFingerprint' in df.columns and not df[df['DeviceFingerprint'] == final_fingerprint].empty:
