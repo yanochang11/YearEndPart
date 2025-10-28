@@ -3,8 +3,8 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="Fingerprint Test", layout="centered")
 
-st.title("FingerprintJS 測試環境")
-st.markdown("這個頁面只用來測試能否成功從瀏覽器獲取設備識別碼。")
+st.title("FingerprintJS 測試環境 (修正版)")
+st.markdown("這個版本會明確地顯示獲取到的**識別碼字串**。")
 
 def get_fingerprint_component():
     """
@@ -14,7 +14,6 @@ def get_fingerprint_component():
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
     <script>
       (function() {
-        // 使用一個旗標來確保此腳本只執行一次
         if (window.fingerprintSent) {
           return;
         }
@@ -22,15 +21,12 @@ def get_fingerprint_component():
 
         const getAndSendFingerprint = async () => {
           try {
-            // 等待 Streamlit 物件準備就緒
             while (!window.Streamlit) {
               await new Promise(resolve => setTimeout(resolve, 50));
             }
 
             const fp = await FingerprintJS.load();
             const result = await fp.get();
-            
-            // 回傳獲取到的 visitorId
             window.Streamlit.setComponentValue(result.visitorId);
 
           } catch (error) {
@@ -51,13 +47,29 @@ def get_fingerprint_component():
 # --- 主程式邏輯 ---
 st.header("測試結果")
 
-# 呼叫元件並等待回傳值
-fingerprint = get_fingerprint_component()
+# 初始化 session_state
+if 'fingerprint_val' not in st.session_state:
+    st.session_state.fingerprint_val = None
 
-if fingerprint:
-    st.success("🎉 成功獲取到 Fingerprint！")
-    st.code(fingerprint, language=None)
-    st.info("這表示前後端通訊正常。您可以將此邏輯應用回您的主程式中。")
+# 只有在還沒有拿到值的時候，才呼叫元件
+if st.session_state.fingerprint_val is None:
+    component_return_value = get_fingerprint_component()
+    
+    # 如果元件有回傳值了，就存起來並重新整理頁面
+    if component_return_value:
+        st.session_state.fingerprint_val = component_return_value
+        st.rerun()
+
+# 檢查最終結果
+if st.session_state.fingerprint_val:
+    # 檢查收到的值是不是一個字串
+    if isinstance(st.session_state.fingerprint_val, str):
+        st.success("🎉 成功獲取到 Fingerprint 字串！")
+        st.code(st.session_state.fingerprint_val, language=None)
+        st.info("這串由數字和字母組成的就是我們需要的設備識別碼。")
+    else:
+        st.error("收到的資料不是字串格式，請檢查。")
+        st.write("收到的原始資料：")
+        st.code(st.session_state.fingerprint_val, language=None)
 else:
     st.warning("🔄 正在等待從前端獲取 Fingerprint...")
-    st.info("如果長時間停留在此畫面，請檢查瀏覽器的開發者工具 (F12) 中的 Console 是否有錯誤訊息。")
