@@ -1,4 +1,4 @@
-# app_v1.2.0.py
+# app_v1.3.0.py
 import streamlit as st
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -9,7 +9,7 @@ import pytz
 import streamlit.components.v1 as components
 
 # --- App Version ---
-VERSION = "1.2.0 (Final Stable Release)"
+VERSION = "1.3.0 (Final Stable Release)"
 
 # --- Configuration ---
 TIMEZONE = "Asia/Taipei"
@@ -25,7 +25,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- Custom CSS (僅保留基本排版，以適應系統主題) ---
+# --- Custom CSS ---
 st.markdown("""
 <style>
     .main .block-container {
@@ -139,7 +139,7 @@ def main():
     '''
     components.html(js_code, height=0)
 
-    # 隱藏的輸入元件，作為 JS 和 Python 之間的穩定橋樑
+    # 隱藏的輸入元件，這是 JS 和 Python 之間唯一的、最可靠的溝通橋樑
     st.text_input("Device Fingerprint", key="device_fingerprint_hidden", label_visibility="hidden",
                   placeholder="__fingerprint_placeholder__")
 
@@ -252,8 +252,10 @@ def handle_check_in(df, employee_row, row_index, client):
     if not fingerprint or fingerprint == "__fingerprint_placeholder__":
         st.warning("🔄 正在識別您的裝置，請稍候...")
         st.caption("如果長時間停留在此畫面，請嘗試重新整理頁面。")
+        # 重要的修正：在這裡返回，等待下一次 Streamlit 刷新時 JS 填入值
         return
     
+    # 如果成功獲取，則顯示在一個禁用的輸入框中
     st.text_input("裝置識別碼 (Device ID)", value=fingerprint, disabled=True)
 
     if st.button("✅ 確認報到"):
