@@ -1,4 +1,4 @@
-# app_v2.3.0.py
+# app_v2.4.0.py
 import streamlit as st
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -9,7 +9,7 @@ import pytz
 import streamlit.components.v1 as components
 
 # --- App Version ---
-VERSION = "2.3.0 (Single Field Fix Release)"
+VERSION = "2.4.0 (Original JS Core Release)"
 
 # --- Configuration ---
 TIMEZONE = "Asia/Taipei"
@@ -91,7 +91,7 @@ def main():
     st.title("活動報到系統")
     st.markdown(f"<p style='text-align: right; color: grey;'>v{VERSION}</p>", unsafe_allow_html=True)
 
-    # --- 1. Fingerprint Acquisition ---
+    # --- 1. (核心修正 v2.4.0) 恢復您最原始、最穩定的 JavaScript 程式碼 ---
     js_code = '''
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
     <script>
@@ -101,17 +101,27 @@ def main():
           .then(fp => fp.get())
           .then(result => {
             const visitorId = result.visitorId;
-            const input = window.parent.document.querySelector('input[placeholder="__fingerprint_placeholder__"]');
-            if (input && (input.value === "" || input.value === "__fingerprint_placeholder__")) {
-                input.value = visitorId;
-                const event = new Event('input', { bubbles: true });
-                input.dispatchEvent(event);
-            }
+            let attempts = 0;
+            const maxAttempts = 50;
+            const intervalId = setInterval(() => {
+                attempts++;
+                const input = window.parent.document.querySelector('input[placeholder="__fingerprint_placeholder__"]');
+                if (input) {
+                    if(input.value === "" || input.value === "__fingerprint_placeholder__") {
+                        input.value = visitorId;
+                        const event = new Event('input', { bubbles: true });
+                        input.dispatchEvent(event);
+                    }
+                    clearInterval(intervalId);
+                } else if (attempts >= maxAttempts) {
+                    clearInterval(intervalId);
+                    console.error('Failed to find the fingerprint input field.');
+                }
+            }, 100);
           })
           .catch(error => console.error(error));
       }
-      window.addEventListener('load', setFingerprint);
-      setTimeout(setFingerprint, 500);
+      setFingerprint();
     </script>
     '''
     components.html(js_code, height=0)
@@ -123,18 +133,16 @@ def main():
         if key not in st.session_state:
             st.session_state[key] = None if key != 'search_term' else ""
 
-    # --- 2. (核心修正 v2.3.0) 統一顯示邏輯 ---
+    # --- 2. 採用 v2.3.0 已修正的統一顯示邏輯 ---
     fingerprint = st.session_state.get('device_fingerprint_hidden')
     is_ready = bool(fingerprint) and fingerprint != "__fingerprint_placeholder__"
 
-    # 決定顯示的值：如果系統就緒，顯示識別碼；否則顯示提示文字
     display_value = fingerprint if is_ready else "正在獲取中..."
     
-    # **永遠只渲染這一個識別碼欄位**
     st.text_input(
         "裝置識別碼 (Device ID)",
         value=display_value,
-        disabled=True,  # 此欄位永遠不可編輯
+        disabled=True,
         key="fingerprint_display_field"
     )
 
@@ -167,15 +175,15 @@ def main():
         elif msg_type == "error": st.error(msg_text)
         st.session_state.feedback = None
 
-    # --- 4. One-Click Action UI (Corrected disabled logic) ---
+    # --- 4. One-Click Action UI ---
     st.session_state.search_term = st.text_input(
         "請輸入您的員工編號或姓名:",
         value=st.session_state.search_term,
         key="search_input",
-        disabled=not is_ready # 系統未就緒時，禁用此欄位
+        disabled=not is_ready
     ).strip()
 
-    if st.button("確認", disabled=not is_ready): # 系統未就緒時，禁用此按鈕
+    if st.button("確認", disabled=not is_ready):
         tz = pytz.timezone(TIMEZONE)
         now = datetime.now(tz).time()
 
