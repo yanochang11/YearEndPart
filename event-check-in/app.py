@@ -11,7 +11,7 @@ import streamlit_cookies_manager
 # --- Timezone Configuration ---
 TIMEZONE = "Asia/Taipei"
 
-# --- Google Sheets Connection (no changes) ---
+# --- Google Sheets Connection ---
 @st.cache_resource(ttl=600)
 def get_gsheet():
     """Establishes a connection to the Google Sheet using cached credentials."""
@@ -34,7 +34,7 @@ def get_gsheet():
 
 @st.cache_data(ttl=60)
 def get_data(_client, sheet_name, worksheet_name):
-    """Fetches the entire employee list and caches it."""
+    """Fetches the entire employee list and caches it for 60 seconds."""
     try:
         sheet = _client.open(sheet_name).worksheet(worksheet_name)
         data = get_as_dataframe(sheet)
@@ -42,14 +42,17 @@ def get_data(_client, sheet_name, worksheet_name):
             data['EmployeeID'] = data['EmployeeID'].astype(str)
         return data
     except gspread.exceptions.SpreadsheetNotFound:
-        st.error(f"Spreadsheet '{sheet_name}' not found.")
+        st.error(f"Spreadsheet '{sheet_name}' not found. Please check configuration.")
         return pd.DataFrame()
     except gspread.exceptions.WorksheetNotFound:
-        st.error(f"Worksheet '{worksheet_name}' not found.")
+        st.error(f"Worksheet '{worksheet_name}' not found. Please check configuration.")
         return pd.DataFrame()
 
 def update_cell(client, sheet_name, worksheet_name, row, col, value):
-    """Updates a single cell in the Google Sheet."""
+    """Updates a single cell in the Google Sheet and clears relevant caches."""
+    if st.session_state.get('mock_mode', False):
+        st.info("Mock mode: Simulating a successful update.")
+        return
     try:
         sheet = client.open(sheet_name).worksheet(worksheet_name)
         sheet.update_cell(row, col, value)
@@ -57,56 +60,62 @@ def update_cell(client, sheet_name, worksheet_name, row, col, value):
     except Exception as e:
         st.error(f"Failed to update Google Sheet: {e}")
 
-# --- Settings Management (no changes) ---
+# --- Settings Management ---
 @st.cache_data(ttl=60)
 def get_settings(_client, sheet_name):
-    """Fetches settings from the 'Settings' worksheet."""
+    """Fetches settings from the 'Settings' worksheet and caches them."""
     try:
         settings_sheet = _client.open(sheet_name).worksheet("Settings")
         mode = settings_sheet.acell('A2').value
-        start_time = datetime.strptime(settings_sheet.acell('B2').value, '%H:%M').time()
-        end_time = datetime.strptime(settings_sheet.acell('C2').value, '%H:%M').time()
+        start_time_str = settings_sheet.acell('B2').value
+        end_time_str = settings_sheet.acell('C2').value
+        start_time = datetime.strptime(start_time_str, '%H:%M').time()
+        end_time = datetime.strptime(end_time_str, '%H:%M').time()
         return {"mode": mode, "start_time": start_time, "end_time": end_time}
     except Exception as e:
-        st.error(f"Could not load settings: {e}")
+        st.error(f"Could not load settings from Google Sheet: {e}. Using default settings.")
         return {"mode": "Check-in", "start_time": time(9, 0), "end_time": time(17, 0)}
 
 def save_settings(client, sheet_name, mode, start_time, end_time):
     """Saves settings to the 'Settings' worksheet."""
+    if st.session_state.get('mock_mode', False):
+        st.info("Mock mode: Simulating a successful settings save.")
+        return
     try:
         settings_sheet = client.open(sheet_name).worksheet("Settings")
         settings_sheet.update('A2:C2', [[mode, start_time.strftime('%H:%M'), end_time.strftime('%H:%M')]])
         get_settings.clear()
-        st.success("Settings saved successfully!")
+        st.success("設定已儲存 / Settings saved successfully!")
     except Exception as e:
-        st.error(f"Failed to save settings: {e}")
+        st.error(f"儲存設定失敗 / Failed to save settings: {e}")
 
 def main():
+    """Main function to run the Streamlit application."""
     st.set_page_config(page_title="Event Check-in/out System", initial_sidebar_state="collapsed")
     
-    # 【關鍵修正 1】: 初始化 Cookie Manager
     cookies = streamlit_cookies_manager.CookieManager()
-    
+
     st.title("Event Check-in/out System")
 
-    # --- 裝置識別碼的獲取、儲存與顯示 ---
+    # --- 1. 裝置識別碼的獲取、儲存與顯示 (最優先執行) ---
+    
+    # 初始化 session state
     if 'device_fingerprint' not in st.session_state:
         st.session_state.device_fingerprint = None
 
-    # 【關鍵修正 2】: 只有在 cookie manager 準備好後才進行操作
+    # 【關鍵修正】: 只有在 cookie manager 準備好後才嘗試讀取
     if cookies.ready():
-        # 優先從 Cookie 載入
-        fingerprint_from_cookie = cookies.get('device_fingerprint')
-        if fingerprint_from_cookie:
-            st.session_state.device_fingerprint = fingerprint_from_cookie
-    
-    # 如果 session state 中仍然沒有，則執行 JS 獲取
+        if not st.session_state.device_fingerprint:
+            st.session_state.device_fingerprint = cookies.get('device_fingerprint')
+
+    # 如果還是沒有，代表是第一次載入，則執行 JS 來獲取
     if not st.session_state.device_fingerprint:
         js_code = '''
-        <script src="https://cdn.jsdelivrnet.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
         <script>
           (async () => {
-            await new Promise(resolve => setTimeout(resolve, 500)); // Wait for Streamlit to be ready
+             // Give a brief moment for Streamlit to initialize
+            await new Promise(resolve => setTimeout(resolve, 500));
             const fp = await FingerprintJS.load();
             const result = await fp.get();
             window.parent.Streamlit.setComponentValue(result.visitorId);
@@ -114,13 +123,14 @@ def main():
         </script>
         '''
         fingerprint_from_js = components.html(js_code, height=0)
-        
+
         if fingerprint_from_js:
             st.session_state.device_fingerprint = fingerprint_from_js
-            st.rerun() # 獲取到值後立即重跑
-    
-    # 【關鍵修正 3】: 獲取到值後，如果 cookie manager 準備好了，就存入 cookie
+            st.rerun() 
+
+    # 如果成功獲取到識別碼，並且 cookie manager 準備好了，就將它存入 cookie
     if st.session_state.device_fingerprint and cookies.ready():
+        # 避免不必要的寫入
         if cookies.get('device_fingerprint') != st.session_state.device_fingerprint:
             cookies['device_fingerprint'] = st.session_state.device_fingerprint
             cookies.save()
@@ -129,7 +139,7 @@ def main():
     display_value = st.session_state.get('device_fingerprint', "正在獲取中... / Acquiring...")
     st.text_input("設備識別碼 / Device Fingerprint", value=display_value, disabled=True, key="fingerprint_display")
 
-    # --- 主應用程式邏輯 ---
+    # --- 2. 主應用程式邏輯 ---
     if 'authenticated' not in st.session_state: st.session_state.authenticated = False
     if 'search_term' not in st.session_state: st.session_state.search_term = ""
     if 'selected_employee_id' not in st.session_state: st.session_state.selected_employee_id = None
@@ -141,8 +151,7 @@ def main():
     client = get_gsheet()
     settings = get_settings(client, GOOGLE_SHEET_NAME)
     st.markdown(f"**目前模式 / Current Mode:** `{settings['mode']}`")
-    
-    # ... (Admin Panel and other UI logic remains the same)
+
     with st.sidebar.expander("管理員面板 / Admin Panel", expanded=False):
         if not st.session_state.authenticated:
             password = st.text_input("請輸入密碼 / Enter password:", type="password", key="password_input")
@@ -177,12 +186,14 @@ def main():
         return
 
     if st.session_state.feedback_message:
-        message_type, message_text = st.session_state.feedback_message.values()
+        message_type = st.session_state.feedback_message["type"]
+        message_text = st.session_state.feedback_message["text"]
         if message_type == "success": st.success(message_text)
         elif message_type == "warning": st.warning(message_text)
         elif message_type == "error": st.error(message_text)
         st.session_state.feedback_message = None
-        
+
+    # --- Search and Confirmation Flow ---
     if not st.session_state.get('selected_employee_id'):
         st.session_state.search_term = st.text_input("請輸入您的員工編號或姓名 / Please enter your Employee ID or Name:", value=st.session_state.search_term, key="search_input").strip()
         if st.button("確認 / Confirm"):
@@ -206,7 +217,7 @@ def main():
                 else:
                     st.session_state.feedback_message = {"type": "error", "text": "查無此人，請確認輸入是否正確，或洽詢工作人員 / User not found, please check your input or contact staff."}
             st.rerun()
-    else:
+    else: # An employee has been selected
         employee_id = st.session_state.selected_employee_id
         employee_row = df[df['EmployeeID'] == employee_id]
         if not employee_row.empty:
@@ -232,21 +243,24 @@ def handle_check_in(df, employee_row, row_index, client):
 
     if st.button("✅ 確認報到 / Confirm Check-in"):
         final_fingerprint = st.session_state.get('device_fingerprint')
+        
         if not final_fingerprint:
              st.error("無法確認報到，識別碼遺失，請刷新頁面再試一次。 / Cannot confirm, fingerprint is missing. Please refresh and try again.")
              return
 
+        # 檢查 Google Sheet 中是否已存在此指紋
         if 'DeviceFingerprint' in df.columns and not df[df['DeviceFingerprint'] == final_fingerprint].empty:
             st.session_state.feedback_message = {"type": "error", "text": "此裝置已完成報到 / This device has already been used for check-in."}
         else:
             table_no = employee_row['TableNo'].iloc[0]
             tz = pytz.timezone(TIMEZONE)
             timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
-            # 假設 DeviceFingerprint 在 F 欄 (第 6 欄)
             update_cell(client, "Event_Check-in", "Sheet1", row_index, 4, timestamp)
+            # 假設 DeviceFingerprint 在 F 欄 (第 6 欄)，請根據您的 Sheet 調整
             update_cell(client, "Event_Check-in", "Sheet1", row_index, 6, final_fingerprint)
             st.session_state.feedback_message = {"type": "success", "text": f"報到成功！歡迎 {name}，您的桌號在 {table_no} / Check-in successful! Welcome {name}, your table is {table_no}"}
 
+        # 只重設使用者相關的狀態，保留 fingerprint
         st.session_state.selected_employee_id = None
         st.session_state.search_term = ""
         st.rerun()
