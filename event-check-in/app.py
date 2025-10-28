@@ -1,4 +1,4 @@
-# app_v2.3.0.py
+# app_v2.4.1.py
 import streamlit as st
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -9,7 +9,7 @@ import pytz
 import streamlit.components.v1 as components
 
 # --- App Version ---
-VERSION = "2.3.0 (Reliable Fingerprint)"
+VERSION = "2.4.1 (Unified Component)"
 
 # --- Configuration ---
 TIMEZONE = "Asia/Taipei"
@@ -106,6 +106,9 @@ def main():
         st.session_state.device_fingerprint_receiver = ""
 
     # --- 1. Fingerprint Acquisition ---
+    # NOTE: The on_change callback below is not triggered in the Playwright
+    # testing environment due to synthetic event limitations.
+    # This feature MUST be manually verified.
     st.text_input(
         label="Device Fingerprint Receiver",
         key="device_fingerprint_receiver",
@@ -113,36 +116,48 @@ def main():
         label_visibility="collapsed"
     )
 
-    # Use st.markdown to inject script directly into the main page head
-    st.markdown(
-        """
-        <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
-        <script>
-          function setFingerprintWhenReady() {
-            const fpPromise = FingerprintJS.load();
-            fpPromise
-              .then(fp => fp.get())
-              .then(result => {
-                const visitorId = result.visitorId;
-                const intervalId = setInterval(() => {
-                  // No need for window.parent, as we are in the same document
-                  const inputElement = document.querySelector('input[aria-label="Device Fingerprint Receiver"]');
-                  if (inputElement) {
-                    clearInterval(intervalId);
-                    inputElement.value = visitorId;
-                    const event = new Event('change', { bubbles: true });
-                    inputElement.dispatchEvent(event);
-                  }
-                }, 150); // Slightly increased interval
-              })
-              .catch(err => console.error('FingerprintJS error:', err));
-          }
-          // Ensure the script runs after the DOM is fully loaded
-          window.addEventListener('load', setFingerprintWhenReady);
-        </script>
-        """,
-        unsafe_allow_html=True
-    )
+    if not st.session_state.is_ready:
+        components.html(
+            f"""
+            <div style="text-align: center; margin-bottom: 1rem;">
+                <button id="fp_button">載入裝置識別碼 / Load Device ID</button>
+            </div>
+            <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
+            <script>
+              const button = document.getElementById('fp_button');
+              if (button) {{
+                button.onclick = function() {{
+                  this.disabled = true;
+                  this.textContent = 'Loading...';
+
+                  const fpPromise = FingerprintJS.load();
+                  fpPromise
+                    .then(fp => fp.get())
+                    .then(result => {{
+                      const visitorId = result.visitorId;
+                      // IMPORTANT: We are now inside the iframe, so we MUST use window.parent
+                      const inputElement = window.parent.document.querySelector('input[aria-label="Device Fingerprint Receiver"]');
+                      if (inputElement) {{
+                        inputElement.value = visitorId;
+                        // CRITICAL: Dispatching this 'change' event works in manual browser testing
+                        // but is ignored by Streamlit's backend in automated Playwright tests.
+                        const event = new Event('change', {{ bubbles: true }});
+                        inputElement.dispatchEvent(event);
+                      }} else {{
+                        console.error('Could not find the parent input element.');
+                        this.textContent = 'Error: Input not found!';
+                      }}
+                    }})
+                    .catch(err => {{
+                        console.error('FingerprintJS error:', err);
+                        this.textContent = 'Error!';
+                    }});
+                }};
+              }}
+            </script>
+            """,
+            height=50,
+        )
 
     # --- 2. Main Application Flow ---
     client = get_gsheet()
