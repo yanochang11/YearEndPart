@@ -270,7 +270,7 @@ def handle_check_in(df, employee_row, row_index, client):
         else:
             table_no = employee_row['TableNo'].iloc[0]
             tz = pytz.timezone(TIMEZONE)
-            timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+            timestamp = datetime.now(tz).strftime("%Y-m-d %H:%M:%S")
             update_cell(client, GOOGLE_SHEET_NAME, WORKSHEET_NAME, row_index, 4, timestamp)
             update_cell(client, GOOGLE_SHEET_NAME, WORKSHEET_NAME, row_index, 6, final_fingerprint)
             st.session_state.feedback = {"type": "success", "text": f"報到成功！歡迎 {name}，您的桌號是 {table_no}"}
@@ -294,7 +294,7 @@ def handle_check_out(employee_row, row_index, client):
     else:
         if st.button("✅ 確認簽退"):
             tz = pytz.timezone(TIMEZONE)
-            timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+            timestamp = datetime.now(tz).strftime("%Y-m-d %H:%M:%S")
             update_cell(client, GOOGLE_SHEET_NAME, WORKSHEET_NAME, row_index, 5, timestamp)
             st.session_state.feedback = {"type": "success", "text": f"簽退成功，{name}，祝您有個美好的一天！"}
             st.session_state.sound_to_play = SUCCESS_SOUND_URL
