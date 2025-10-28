@@ -90,22 +90,18 @@ def main():
 
     # --- 1. 裝置識別碼的獲取與持久化 ---
     
-    # 初始化 session state
     if 'device_fingerprint' not in st.session_state:
         st.session_state.device_fingerprint = None
 
-    # 如果 session state 中沒有識別碼，則執行 JS 來獲取
     if st.session_state.device_fingerprint is None:
         js_code = '''
         <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
         <script>
           (async () => {
-            // Give a brief moment for Streamlit to initialize
             await new Promise(resolve => setTimeout(resolve, 500));
             try {
               const fp = await FingerprintJS.load();
               const result = await fp.get();
-              // This is the reliable way to send data back to Python
               window.parent.Streamlit.setComponentValue(result.visitorId);
             } catch (error) {
               console.error('FingerprintJS error:', error);
@@ -116,13 +112,11 @@ def main():
         '''
         fingerprint_from_js = components.html(js_code, height=0)
 
-        # 如果 JS 成功回傳了值
-        if fingerprint_from_js:
+        # 【關鍵修正】: 只有當回傳值是有效的字串時，才將其存儲並重跑
+        if isinstance(fingerprint_from_js, str) and fingerprint_from_js:
             st.session_state.device_fingerprint = fingerprint_from_js
-            st.rerun() # 立刻重跑一次，確保頁面顯示的是剛獲取到的值
+            st.rerun()
 
-    # 無論如何，都顯示目前 session state 中的識別碼
-    # 如果還沒獲取到，顯示 "正在獲取中..."
     display_value = st.session_state.get('device_fingerprint', "正在獲取中... / Acquiring...")
     st.text_input("設備識別碼 / Device Fingerprint", value=display_value, disabled=True)
 
@@ -173,8 +167,7 @@ def main():
         return
 
     if st.session_state.feedback_message:
-        message_type = st.session_state.feedback_message["type"]
-        message_text = st.session_state.feedback_message["text"]
+        message_type, message_text = st.session_state.feedback_message.values()
         if message_type == "success": st.success(message_text)
         elif message_type == "warning": st.warning(message_text)
         elif message_type == "error": st.error(message_text)
