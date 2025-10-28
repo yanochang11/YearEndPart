@@ -86,33 +86,38 @@ def save_settings(client, sheet_name, mode, start_time, end_time):
 
 def get_fingerprint_component():
     """
-    Renders a robust JavaScript component to get the device fingerprint.
-    It now polls for the Streamlit object to ensure it's ready.
+    Renders a robust JavaScript component that polls until the Streamlit object is ready.
     """
     js_code = """
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
     <script>
-      // Function to get the fingerprint and send it to Streamlit
-      const getFingerprint = () => {
-        (async () => {
+      // Self-executing function with a flag to ensure it runs only once
+      (function() {
+        if (window.fingerprintSent) {
+          return;
+        }
+        window.fingerprintSent = true;
+
+        const getAndSendFingerprint = async () => {
           try {
+            // Actively wait for the Streamlit object to become available
+            while (!window.Streamlit) {
+              await new Promise(resolve => setTimeout(resolve, 50));
+            }
+            
             const fp = await FingerprintJS.load();
             const result = await fp.get();
             Streamlit.setComponentValue(result.visitorId);
           } catch (error) {
             console.error("FingerprintJS error:", error);
-            Streamlit.setComponentValue("error");
+            if (window.Streamlit) {
+              Streamlit.setComponentValue("error");
+            }
           }
-        })();
-      };
+        };
 
-      // Poll to check if the Streamlit object is available
-      const intervalId = setInterval(() => {
-        if (window.Streamlit) {
-          clearInterval(intervalId); // Stop polling
-          getFingerprint();        // Run the function
-        }
-      }, 100); // Check every 100ms
+        getAndSendFingerprint();
+      })();
     </script>
     """
     return components.html(js_code, height=0)
