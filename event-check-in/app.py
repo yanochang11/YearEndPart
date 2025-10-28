@@ -1,4 +1,4 @@
-# app_final_stable.py
+# app_v2.2.0.py
 import streamlit as st
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -9,7 +9,7 @@ import pytz
 import streamlit.components.v1 as components
 
 # --- App Version ---
-VERSION = "Final Stable Release"
+VERSION = "2.2.0 (Corrected State Release)"
 
 # --- Configuration ---
 TIMEZONE = "Asia/Taipei"
@@ -23,16 +23,18 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- Custom CSS (From original app.py) ---
+# --- Custom CSS ---
 st.markdown("""
 <style>
     .main .block-container {
-        padding-top: 2rem;
+        padding-top: 1rem;
         padding-bottom: 2rem;
     }
-    /* This rule correctly hides the underlying data capture field */
-    div[data-testid="stTextInput"] input[placeholder="__fingerprint_placeholder__"] {
-        display: none;
+    body { background-color: #f0f2f6; }
+    h1 { color: #1a1a1a; font-weight: 600; }
+    div[data-testid="stTextInput"][disabled] input, div[data-testid="stButton"][disabled] button {
+        background-color: #e9ecef;
+        cursor: not-allowed;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -50,17 +52,20 @@ def get_data(_client, sheet_name, worksheet_name):
         sheet = _client.open(sheet_name).worksheet(worksheet_name)
         data = get_as_dataframe(sheet, evaluate_formulas=True)
         for col in ['EmployeeID', 'DeviceFingerprint']:
-            if col in data.columns: data[col] = data[col].astype(str).str.strip()
+            if col in data.columns:
+                data[col] = data[col].astype(str).str.strip()
         return data.dropna(how='all')
     except Exception as e:
-        st.error(f"無法讀取資料表 '{sheet_name}/{worksheet_name}'。錯誤: {e}"); return pd.DataFrame()
+        st.error(f"無法讀取資料表 '{sheet_name}/{worksheet_name}'。錯誤: {e}")
+        return pd.DataFrame()
 
 def update_cell(client, sheet_name, worksheet_name, row, col, value):
     try:
         sheet = client.open(sheet_name).worksheet(worksheet_name)
         sheet.update_cell(row, col, value)
         get_data.clear()
-    except Exception as e: st.error(f"更新 Google Sheet 失敗: {e}")
+    except Exception as e:
+        st.error(f"更新 Google Sheet 失敗: {e}")
 
 @st.cache_data(ttl=60)
 def get_settings(_client, sheet_name):
@@ -79,13 +84,14 @@ def save_settings(client, sheet_name, mode, start_time, end_time):
         settings_sheet.update('A2:C2', [[mode, start_time.strftime('%H:%M'), end_time.strftime('%H:%M')]])
         get_settings.clear()
         st.success("設定已儲存!")
-    except Exception as e: st.error(f"儲存設定失敗: {e}")
+    except Exception as e:
+        st.error(f"儲存設定失敗: {e}")
 
 def main():
     st.title("活動報到系統")
     st.markdown(f"<p style='text-align: right; color: grey;'>v{VERSION}</p>", unsafe_allow_html=True)
 
-    # --- 1. Your original, trusted JavaScript Core ---
+    # --- 1. Fingerprint Acquisition ---
     js_code = '''
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
     <script>
@@ -95,49 +101,48 @@ def main():
           .then(fp => fp.get())
           .then(result => {
             const visitorId = result.visitorId;
-            let attempts = 0;
-            const maxAttempts = 50;
-            const intervalId = setInterval(() => {
-                attempts++;
-                const input = window.parent.document.querySelector('input[placeholder="__fingerprint_placeholder__"]');
-                if (input) {
-                    if(input.value === "" || input.value === "__fingerprint_placeholder__") {
-                        input.value = visitorId;
-                        const event = new Event('input', { bubbles: true });
-                        input.dispatchEvent(event);
-                    }
-                    clearInterval(intervalId);
-                } else if (attempts >= maxAttempts) {
-                    clearInterval(intervalId);
-                }
-            }, 100);
+            const input = window.parent.document.querySelector('input[placeholder="__fingerprint_placeholder__"]');
+            if (input && (input.value === "" || input.value === "__fingerprint_placeholder__")) {
+                input.value = visitorId;
+                const event = new Event('input', { bubbles: true });
+                input.dispatchEvent(event);
+            }
           })
           .catch(error => console.error(error));
       }
-      setFingerprint();
+      window.addEventListener('load', setFingerprint);
+      setTimeout(setFingerprint, 500);
     </script>
     '''
     components.html(js_code, height=0)
 
-    # The hidden input, correctly hidden by the CSS above
-    st.text_input("Device Fingerprint", key="device_fingerprint_hidden", label_visibility="hidden",
+    st.text_input("Device Fingerprint Hidden", key="device_fingerprint_hidden", label_visibility="hidden",
                   placeholder="__fingerprint_placeholder__")
 
-    # Initialize states
     for key in ['authenticated', 'search_term', 'feedback']:
         if key not in st.session_state:
             st.session_state[key] = None if key != 'search_term' else ""
 
-    # --- 2. Corrected UI Display Logic ---
+    # --- 2. (核心修正 v2.2.0) Determine UI readiness and display ---
     fingerprint = st.session_state.get('device_fingerprint_hidden')
+    # 系統是否就緒，取決於是否成功獲取到識別碼
     is_ready = bool(fingerprint) and fingerprint != "__fingerprint_placeholder__"
-    display_value = fingerprint if is_ready else "正在獲取中..."
-    
-    st.text_input(
-        "裝置識別碼 (Device ID)",
-        value=display_value,
-        disabled=True
-    )
+
+    # 識別碼欄位：只在就緒後顯示，且永遠禁用
+    if is_ready:
+        st.text_input(
+            "裝置識別碼 (Device ID)",
+            value=fingerprint,
+            disabled=True, # 確保此欄位永遠不能編輯
+            key="fingerprint_display_field"
+        )
+    else:
+        # 在未就緒時，顯示一個禁用的佔位欄位
+        st.text_input(
+            "裝置識別碼 (Device ID)",
+            "正在獲取中...",
+            disabled=True
+        )
 
     # --- 3. Main Application Flow ---
     client = get_gsheet()
@@ -168,15 +173,15 @@ def main():
         elif msg_type == "error": st.error(msg_text)
         st.session_state.feedback = None
 
-    # --- 4. One-Click Action UI ---
+    # --- 4. One-Click Action UI (Corrected disabled logic) ---
     st.session_state.search_term = st.text_input(
         "請輸入您的員工編號或姓名:",
         value=st.session_state.search_term,
         key="search_input",
-        disabled=not is_ready
+        disabled=not is_ready # **修正點**: 系統未就緒時，禁用此欄位
     ).strip()
 
-    if st.button("確認", disabled=not is_ready):
+    if st.button("確認", disabled=not is_ready): # **修正點**: 系統未就緒時，禁用此按鈕
         tz = pytz.timezone(TIMEZONE)
         now = datetime.now(tz).time()
 
