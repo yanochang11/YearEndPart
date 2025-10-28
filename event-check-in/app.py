@@ -1,4 +1,4 @@
-# app_v2.1.0.py
+# app_v2.2.0.py
 import streamlit as st
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -9,7 +9,7 @@ import pytz
 import streamlit.components.v1 as components
 
 # --- App Version ---
-VERSION = "2.1.0 (UI State Controlled Release)"
+VERSION = "2.2.0 (Corrected State Release)"
 
 # --- Configuration ---
 TIMEZONE = "Asia/Taipei"
@@ -32,7 +32,6 @@ st.markdown("""
     }
     body { background-color: #f0f2f6; }
     h1 { color: #1a1a1a; font-weight: 600; }
-    /* 讓被禁用的元件有更清晰的視覺提示 */
     div[data-testid="stTextInput"][disabled] input, div[data-testid="stButton"][disabled] button {
         background-color: #e9ecef;
         cursor: not-allowed;
@@ -88,12 +87,11 @@ def save_settings(client, sheet_name, mode, start_time, end_time):
     except Exception as e:
         st.error(f"儲存設定失敗: {e}")
 
-
 def main():
     st.title("活動報到系統")
     st.markdown(f"<p style='text-align: right; color: grey;'>v{VERSION}</p>", unsafe_allow_html=True)
 
-    # --- 1. Fingerprint Acquisition (Trusted Method) ---
+    # --- 1. Fingerprint Acquisition ---
     js_code = '''
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
     <script>
@@ -118,24 +116,31 @@ def main():
     '''
     components.html(js_code, height=0)
 
-    # Hidden input as the single source of truth for the fingerprint
     st.text_input("Device Fingerprint Hidden", key="device_fingerprint_hidden", label_visibility="hidden",
                   placeholder="__fingerprint_placeholder__")
 
-    # Initialize states
     for key in ['authenticated', 'search_term', 'feedback']:
         if key not in st.session_state:
             st.session_state[key] = None if key != 'search_term' else ""
 
-    # --- 2. (核心修改 v2.1.0) Determine UI readiness ---
+    # --- 2. (核心修正 v2.2.0) Determine UI readiness and display ---
     fingerprint = st.session_state.get('device_fingerprint_hidden')
+    # 系統是否就緒，取決於是否成功獲取到識別碼
     is_ready = bool(fingerprint) and fingerprint != "__fingerprint_placeholder__"
 
-    # Display the fingerprint field (always disabled) once ready
+    # 識別碼欄位：只在就緒後顯示，且永遠禁用
     if is_ready:
         st.text_input(
             "裝置識別碼 (Device ID)",
             value=fingerprint,
+            disabled=True, # 確保此欄位永遠不能編輯
+            key="fingerprint_display_field"
+        )
+    else:
+        # 在未就緒時，顯示一個禁用的佔位欄位
+        st.text_input(
+            "裝置識別碼 (Device ID)",
+            "正在獲取中...",
             disabled=True
         )
 
@@ -150,22 +155,17 @@ def main():
             password = st.text_input("請輸入密碼:", type="password", key="admin_password")
             if st.button("登入"):
                 if password == st.secrets.admin.password:
-                    st.session_state.authenticated = True
-                    st.rerun()
-                else:
-                    st.error("密碼錯誤")
+                    st.session_state.authenticated = True; st.rerun()
+                else: st.error("密碼錯誤")
         else:
             st.success("已認證")
             mode = st.radio("模式", ["Check-in", "Check-out"], index=["Check-in", "Check-out"].index(settings['mode']))
             start_time = st.time_input("開始時間", settings['start_time'])
             end_time = st.time_input("結束時間", settings['end_time'])
-            if st.button("儲存設定"):
-                save_settings(client, GOOGLE_SHEET_NAME, mode, start_time, end_time)
-            if st.button("登出"):
-                st.session_state.authenticated = False
-                st.rerun()
+            if st.button("儲存設定"): save_settings(client, GOOGLE_SHEET_NAME, mode, start_time, end_time)
+            if st.button("登出"): st.session_state.authenticated = False; st.rerun()
 
-    # Feedback display logic
+    # Feedback display
     if st.session_state.feedback:
         msg_type, msg_text = st.session_state.feedback.values()
         if msg_type == "success": st.success(msg_text)
@@ -173,15 +173,15 @@ def main():
         elif msg_type == "error": st.error(msg_text)
         st.session_state.feedback = None
 
-    # --- 4. One-Click Action UI ---
+    # --- 4. One-Click Action UI (Corrected disabled logic) ---
     st.session_state.search_term = st.text_input(
         "請輸入您的員工編號或姓名:",
         value=st.session_state.search_term,
         key="search_input",
-        disabled=(not is_ready) # UI is disabled until fingerprint is acquired
+        disabled=not is_ready # **修正點**: 系統未就緒時，禁用此欄位
     ).strip()
 
-    if st.button("確認", disabled=(not is_ready)): # Button is also disabled
+    if st.button("確認", disabled=not is_ready): # **修正點**: 系統未就緒時，禁用此按鈕
         tz = pytz.timezone(TIMEZONE)
         now = datetime.now(tz).time()
 
@@ -193,30 +193,22 @@ def main():
             with st.spinner("正在處理..."):
                 df = get_data(client, GOOGLE_SHEET_NAME, WORKSHEET_NAME)
                 if not df.empty:
-                    # Pass the guaranteed-to-be-valid fingerprint to the processing function
                     process_request(df, settings, client, fingerprint)
 
         st.session_state.search_term = ""
         st.rerun()
 
 def process_request(df, settings, client, final_fingerprint):
-    """ Handles check-in/out logic. It's only called when the UI is ready. """
     search_term = st.session_state.search_term.lower()
-
     id_match = df[df['EmployeeID'].str.lower() == search_term]
     name_match = df[df['Name'].str.lower() == search_term]
-
     employee_row = pd.DataFrame()
-    if not id_match.empty:
-        employee_row = id_match.iloc[[0]]
+
+    if not id_match.empty: employee_row = id_match.iloc[[0]]
     elif not name_match.empty:
         if len(name_match) == 1: employee_row = name_match.iloc[[0]]
-        else:
-            st.session_state.feedback = {"type": "warning", "text": "找到多位同名員工，請改用員工編號搜尋。"}
-            return
-    else:
-        st.session_state.feedback = {"type": "error", "text": "查無此人，請確認輸入是否正確。"}
-        return
+        else: st.session_state.feedback = {"type": "warning", "text": "找到多位同名員工，請改用員工編號搜尋。"}; return
+    else: st.session_state.feedback = {"type": "error", "text": "查無此人，請確認輸入是否正確。"}; return
 
     row_index = employee_row.index[0] + 2
     name = employee_row['Name'].iloc[0]
