@@ -1,4 +1,4 @@
-# app_v1.0.6.py
+# app_v1.1.0.py
 import streamlit as st
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -9,7 +9,7 @@ import pytz
 import streamlit.components.v1 as components
 
 # --- App Version ---
-VERSION = "1.0.6"
+VERSION = "1.1.0 (Stable Fingerprint)"
 
 # --- Configuration ---
 TIMEZONE = "Asia/Taipei"
@@ -54,7 +54,7 @@ def get_data(_client, sheet_name, worksheet_name):
     """Fetches and caches data from the worksheet."""
     try:
         sheet = _client.open(sheet_name).worksheet(worksheet_name)
-        data = get_as_dataframe(sheet)
+        data = get_as_dataframe(sheet, evaluate_formulas=True)
         for col in ['EmployeeID', 'DeviceFingerprint']:
             if col in data.columns:
                 data[col] = data[col].astype(str).str.strip()
@@ -103,33 +103,31 @@ def main():
     st.markdown(f"<p style='text-align: right; color: grey;'>v{VERSION}</p>", unsafe_allow_html=True)
 
     # --- (核心) 裝置識別碼處理 (完全依照您提供的穩定版本) ---
+    # 說明：此方法經使用者驗證為在其環境中最穩定可靠的機制。
+    # 流程：
+    # 1. 前端執行 JavaScript 取得 fingerprint。
+    # 2. JavaScript 將 fingerprint 填入下方隱藏的 st.text_input。
+    # 3. Python 端直接從 st.session_state['device_fingerprint_hidden'] 讀取此值。
     js_code = '''
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
     <script>
       function setFingerprint() {
-        const fpPromise = FingerprintJS.load();
-        fpPromise
-          .then(fp => fp.get())
-          .then(result => {
-            const visitorId = result.visitorId;
-            let attempts = 0;
-            const maxAttempts = 50;
-            const intervalId = setInterval(() => {
-                attempts++;
+        // 增加一個延遲以確保 Streamlit 元件已渲染
+        setTimeout(() => {
+            const fpPromise = FingerprintJS.load();
+            fpPromise
+              .then(fp => fp.get())
+              .then(result => {
+                const visitorId = result.visitorId;
                 const input = window.parent.document.querySelector('input[placeholder="__fingerprint_placeholder__"]');
-                if (input) {
-                    if(input.value === "" || input.value === "__fingerprint_placeholder__") {
-                        input.value = visitorId;
-                        const event = new Event('input', { bubbles: true });
-                        input.dispatchEvent(event);
-                    }
-                    clearInterval(intervalId);
-                } else if (attempts >= maxAttempts) {
-                    clearInterval(intervalId);
+                if (input && (input.value === "" || input.value === "__fingerprint_placeholder__")) {
+                    input.value = visitorId;
+                    const event = new Event('input', { bubbles: true });
+                    input.dispatchEvent(event);
                 }
-            }, 100);
-          })
-          .catch(error => console.error(error));
+              })
+              .catch(error => console.error("FingerprintJS Error:", error));
+        }, 500); // 延遲 500 毫秒
       }
       setFingerprint();
     </script>
@@ -242,7 +240,7 @@ def handle_check_in(df, employee_row, row_index, client):
         st.rerun()
         return
 
-    # 唯一的真相來源：從隱藏元件讀取識別碼
+    # 唯一的真相來源：直接從隱藏元件的 session_state 讀取識別碼
     fingerprint = st.session_state.get('device_fingerprint_hidden')
 
     # 檢查是否已成功獲取
@@ -254,7 +252,7 @@ def handle_check_in(df, employee_row, row_index, client):
     st.text_input("裝置識別碼 (Device ID)", value=fingerprint, disabled=True)
 
     if st.button("✅ 確認報到"):
-        # 再次從真相來源確認最新的識別碼
+        # 在按下按鈕的瞬間，再次從唯一的真相來源確認最新的識別碼
         final_fingerprint = st.session_state.get('device_fingerprint_hidden')
         if not final_fingerprint or final_fingerprint == "__fingerprint_placeholder__":
             st.session_state.feedback = {"type": "error", "text": "無法確認報到，識別碼遺失，請刷新頁面再試一次。"}
@@ -271,7 +269,7 @@ def handle_check_in(df, employee_row, row_index, client):
             st.session_state.feedback = {"type": "success", "text": f"報到成功！歡迎 {name}，您的桌號是 {table_no}"}
             st.session_state.sound_to_play = SUCCESS_SOUND_URL
 
-        # 重設狀態
+        # 重設狀態以供下一位使用者
         st.session_state.selected_employee_id = None
         st.session_state.search_term = ""
         st.rerun()
