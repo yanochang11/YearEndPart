@@ -1,4 +1,4 @@
-# app_v1.0.4.py
+# app_v1.0.5.py
 import streamlit as st
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -9,7 +9,7 @@ import pytz
 import streamlit.components.v1 as components
 
 # --- App Version ---
-VERSION = "1.0.4"
+VERSION = "1.0.5"
 
 # --- Configuration ---
 TIMEZONE = "Asia/Taipei"
@@ -25,16 +25,12 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- Custom CSS (已移除背景顏色設定) ---
+# --- Custom CSS (恢復預設主題) ---
 st.markdown("""
 <style>
     .main .block-container {
         padding-top: 2rem;
         padding-bottom: 2rem;
-    }
-    /* 使隱藏輸入框在視覺上不可見 */
-    div[data-testid="stTextInput"] input[placeholder="__fingerprint_placeholder__"] {
-        display: none;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -42,28 +38,16 @@ st.markdown("""
 
 # --- Google Sheets Connection ---
 @st.cache_resource(ttl=600)
-def get_gsheet():
-    """Establishes a connection to the Google Sheet using cached credentials."""
+def get_gsheet_client():
+    """Establishes a connection to Google Sheets."""
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds_dict = {
-        "type": st.secrets.gcp_service_account.type,
-        "project_id": st.secrets.gcp_service_account.project_id,
-        "private_key_id": st.secrets.gcp_service_account.private_key_id,
-        "private_key": st.secrets.gcp_service_account.private_key,
-        "client_email": st.secrets.gcp_service_account.client_email,
-        "client_id": st.secrets.gcp_service_account.client_id,
-        "auth_uri": st.secrets.gcp_service_account.auth_uri,
-        "token_uri": st.secrets.gcp_service_account.token_uri,
-        "auth_provider_x509_cert_url": st.secrets.gcp_service_account.auth_provider_x509_cert_url,
-        "client_x509_cert_url": st.secrets.gcp_service_account.client_x509_cert_url,
-    }
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(st.secrets.gcp_service_account, scope)
     client = gspread.authorize(creds)
     return client
 
 @st.cache_data(ttl=30)
 def get_data(_client, sheet_name, worksheet_name):
-    """Fetches data from the worksheet and caches it."""
+    """Fetches and caches data from the worksheet."""
     try:
         sheet = _client.open(sheet_name).worksheet(worksheet_name)
         data = get_as_dataframe(sheet)
@@ -72,7 +56,7 @@ def get_data(_client, sheet_name, worksheet_name):
                 data[col] = data[col].astype(str).str.strip()
         return data.dropna(how='all')
     except Exception as e:
-        st.error(f"無法讀取資料表 '{sheet_name}/{worksheet_name}'。請檢查設定。錯誤: {e}")
+        st.error(f"無法讀取資料表 '{sheet_name}/{worksheet_name}'。錯誤: {e}")
         return pd.DataFrame()
 
 def update_cell(client, sheet_name, worksheet_name, row, col, value):
@@ -91,10 +75,8 @@ def get_settings(_client, sheet_name):
     try:
         settings_sheet = _client.open(sheet_name).worksheet("Settings")
         mode = settings_sheet.acell('A2').value
-        start_time_str = settings_sheet.acell('B2').value
-        end_time_str = settings_sheet.acell('C2').value
-        start_time = datetime.strptime(start_time_str, '%H:%M').time()
-        end_time = datetime.strptime(end_time_str, '%H:%M').time()
+        start_time = datetime.strptime(settings_sheet.acell('B2').value, '%H:%M').time()
+        end_time = datetime.strptime(settings_sheet.acell('C2').value, '%H:%M').time()
         return {"mode": mode, "start_time": start_time, "end_time": end_time}
     except Exception as e:
         st.error(f"無法載入設定，將使用預設值。錯誤: {e}")
@@ -110,59 +92,85 @@ def save_settings(client, sheet_name, mode, start_time, end_time):
     except Exception as e:
         st.error(f"儲存設定失敗: {e}")
 
+# --- (新) 強固型裝置識別碼獲取元件 ---
+def get_fingerprint_component():
+    """
+    渲染一個 JavaScript 元件，使用 setComponentValue 將識別碼回傳給 Python。
+    這是目前最穩定可靠的方法。
+    """
+    js_code = """
+    <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
+    <script>
+      (async () => {
+        // 設置一個標記，防止重複執行
+        if (window.fingerprintJsExecuted) {
+            return;
+        }
+        window.fingerprintJsExecuted = true;
+        try {
+            // 等待 Streamlit 物件準備就緒
+            while (!window.Streamlit) {
+              await new Promise(resolve => setTimeout(resolve, 50));
+            }
+            const fp = await FingerprintJS.load();
+            const result = await fp.get();
+            // 使用 setComponentValue 將值傳回 Python 後端
+            window.Streamlit.setComponentValue(result.visitorId);
+        } catch (error) {
+            console.error("FingerprintJS error:", error);
+            window.Streamlit.setComponentValue({ "error": error.message });
+        }
+      })();
+    </script>
+    """
+    return components.html(js_code, height=0)
+
 def main():
     """Main function to run the Streamlit application."""
     st.title("活動報到系統")
     st.markdown(f"<p style='text-align: right; color: grey;'>v{VERSION}</p>", unsafe_allow_html=True)
 
-    # --- Device Fingerprint Handling ---
-    js_code = '''
-    <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
-    <script>
-      function setFingerprint() {
-        const fpPromise = FingerprintJS.load();
-        fpPromise
-          .then(fp => fp.get())
-          .then(result => {
-            const visitorId = result.visitorId;
-            let attempts = 0;
-            const maxAttempts = 50;
-            const intervalId = setInterval(() => {
-                attempts++;
-                const input = window.parent.document.querySelector('input[placeholder="__fingerprint_placeholder__"]');
-                if (input) {
-                    if(input.value === "" || input.value === "__fingerprint_placeholder__") {
-                        input.value = visitorId;
-                        const event = new Event('input', { bubbles: true });
-                        input.dispatchEvent(event);
-                    }
-                    clearInterval(intervalId);
-                } else if (attempts >= maxAttempts) {
-                    clearInterval(intervalId);
-                }
-            }, 100);
-          })
-          .catch(error => console.error(error));
-      }
-      setFingerprint();
-    </script>
-    '''
-    components.html(js_code, height=0)
-
-    st.text_input("Device Fingerprint", key="device_fingerprint_hidden", label_visibility="hidden",
-                  placeholder="__fingerprint_placeholder__")
-
     # --- App State Initialization ---
-    if 'authenticated' not in st.session_state: st.session_state.authenticated = False
-    if 'search_term' not in st.session_state: st.session_state.search_term = ""
-    if 'selected_employee_id' not in st.session_state: st.session_state.selected_employee_id = None
-    if 'feedback' not in st.session_state: st.session_state.feedback = None
-    if 'sound_to_play' not in st.session_state: st.session_state.sound_to_play = None
+    if 'device_fingerprint' not in st.session_state:
+        st.session_state.device_fingerprint = None
+    if 'authenticated' not in st.session_state:
+        st.session_state.authenticated = False
+    if 'search_term' not in st.session_state:
+        st.session_state.search_term = ""
+    if 'selected_employee_id' not in st.session_state:
+        st.session_state.selected_employee_id = None
+    if 'feedback' not in st.session_state:
+        st.session_state.feedback = None
+    if 'sound_to_play' not in st.session_state:
+        st.session_state.sound_to_play = None
 
-    client = get_gsheet()
+
+    # --- (新) 識別碼捕獲流程 ---
+    # 只有在尚未成功獲取識別碼時，才執行此區塊
+    if not st.session_state.device_fingerprint:
+        st.info("🔄 正在初始化報到系統，請稍候...")
+        st.caption("這個過程只需要幾秒鐘。")
+        
+        # 呼叫前端元件
+        component_value = get_fingerprint_component()
+
+        # 檢查回傳值：必須是一個非空的字串
+        if component_value and isinstance(component_value, str):
+            st.session_state.device_fingerprint = component_value
+            # 重新整理頁面，鎖定識別碼並進入主流程
+            st.rerun()
+        
+        # 如果長時間沒有有效回傳值，程式會停留在這裡，直到成功為止
+        return # 在成功獲取前，不執行下方任何程式碼
+
+    # --- 主應用程式流程 (只有在成功獲取識別碼後才會執行) ---
+    
+    client = get_gsheet_client()
     settings = get_settings(client, GOOGLE_SHEET_NAME)
     st.info(f"**目前模式:** `{settings['mode']}`")
-
+    
+    # ... (管理員面板及後續所有邏輯維持不變) ...
+    # Admin Panel and other logic remains the same
     with st.sidebar.expander("管理員面板", expanded=False):
         if not st.session_state.authenticated:
             password = st.text_input("請輸入密碼:", type="password")
@@ -249,22 +257,14 @@ def handle_check_in(df, employee_row, row_index, client):
         st.session_state.search_term = ""
         st.rerun()
         return
-
-    fingerprint = st.session_state.get('device_fingerprint_hidden')
-
-    if not fingerprint or fingerprint == "__fingerprint_placeholder__":
-        st.warning("🔄 正在識別您的裝置，請稍候...")
-        st.caption("如果長時間停留在此畫面，請嘗試重新整理頁面。")
-        return
     
+    # 此時，識別碼必定存在且有效
+    fingerprint = st.session_state.device_fingerprint
     st.text_input("裝置識別碼 (Device ID)", value=fingerprint, disabled=True)
 
     if st.button("✅ 確認報到"):
-        final_fingerprint = st.session_state.get('device_fingerprint_hidden')
-        if not final_fingerprint or final_fingerprint == "__fingerprint_placeholder__":
-            st.session_state.feedback = {"type": "error", "text": "無法確認報到，識別碼遺失，請刷新頁面再試一次。"}
-            st.session_state.sound_to_play = ERROR_SOUND_URL
-        elif 'DeviceFingerprint' in df.columns and not df[df['DeviceFingerprint'] == final_fingerprint].empty:
+        final_fingerprint = st.session_state.device_fingerprint
+        if 'DeviceFingerprint' in df.columns and not df[df['DeviceFingerprint'] == final_fingerprint].empty:
             st.session_state.feedback = {"type": "error", "text": "此裝置已用於報到，請勿代他人操作。"}
             st.session_state.sound_to_play = ERROR_SOUND_URL
         else:
@@ -281,7 +281,7 @@ def handle_check_in(df, employee_row, row_index, client):
         st.rerun()
 
 def handle_check_out(employee_row, row_index, client):
-    """Handles the check-out process."""
+    # This function remains the same
     name = employee_row['Name'].iloc[0]
     st.subheader(f"確認簽退: {name}")
 
