@@ -6,7 +6,6 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 from datetime import datetime, time, timedelta
 import pytz
 import streamlit.components.v1 as components
-import streamlit_cookies_manager
 
 # --- Timezone Configuration ---
 TIMEZONE = "Asia/Taipei"
@@ -50,9 +49,6 @@ def get_data(_client, sheet_name, worksheet_name):
 
 def update_cell(client, sheet_name, worksheet_name, row, col, value):
     """Updates a single cell in the Google Sheet and clears relevant caches."""
-    if st.session_state.get('mock_mode', False):
-        st.info("Mock mode: Simulating a successful update.")
-        return
     try:
         sheet = client.open(sheet_name).worksheet(worksheet_name)
         sheet.update_cell(row, col, value)
@@ -78,9 +74,6 @@ def get_settings(_client, sheet_name):
 
 def save_settings(client, sheet_name, mode, start_time, end_time):
     """Saves settings to the 'Settings' worksheet."""
-    if st.session_state.get('mock_mode', False):
-        st.info("Mock mode: Simulating a successful settings save.")
-        return
     try:
         settings_sheet = client.open(sheet_name).worksheet("Settings")
         settings_sheet.update('A2:C2', [[mode, start_time.strftime('%H:%M'), end_time.strftime('%H:%M')]])
@@ -93,51 +86,45 @@ def main():
     """Main function to run the Streamlit application."""
     st.set_page_config(page_title="Event Check-in/out System", initial_sidebar_state="collapsed")
     
-    cookies = streamlit_cookies_manager.CookieManager()
-
     st.title("Event Check-in/out System")
 
-    # --- 1. 裝置識別碼的獲取、儲存與顯示 (最優先執行) ---
+    # --- 1. 裝置識別碼的獲取與持久化 ---
     
     # 初始化 session state
     if 'device_fingerprint' not in st.session_state:
         st.session_state.device_fingerprint = None
 
-    # 【關鍵修正】: 只有在 cookie manager 準備好後才嘗試讀取
-    if cookies.ready():
-        if not st.session_state.device_fingerprint:
-            st.session_state.device_fingerprint = cookies.get('device_fingerprint')
-
-    # 如果還是沒有，代表是第一次載入，則執行 JS 來獲取
-    if not st.session_state.device_fingerprint:
+    # 如果 session state 中沒有識別碼，則執行 JS 來獲取
+    if st.session_state.device_fingerprint is None:
         js_code = '''
         <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
         <script>
           (async () => {
-             // Give a brief moment for Streamlit to initialize
+            // Give a brief moment for Streamlit to initialize
             await new Promise(resolve => setTimeout(resolve, 500));
-            const fp = await FingerprintJS.load();
-            const result = await fp.get();
-            window.parent.Streamlit.setComponentValue(result.visitorId);
+            try {
+              const fp = await FingerprintJS.load();
+              const result = await fp.get();
+              // This is the reliable way to send data back to Python
+              window.parent.Streamlit.setComponentValue(result.visitorId);
+            } catch (error) {
+              console.error('FingerprintJS error:', error);
+              window.parent.Streamlit.setComponentValue(null);
+            }
           })();
         </script>
         '''
         fingerprint_from_js = components.html(js_code, height=0)
 
+        # 如果 JS 成功回傳了值
         if fingerprint_from_js:
             st.session_state.device_fingerprint = fingerprint_from_js
-            st.rerun() 
-
-    # 如果成功獲取到識別碼，並且 cookie manager 準備好了，就將它存入 cookie
-    if st.session_state.device_fingerprint and cookies.ready():
-        # 避免不必要的寫入
-        if cookies.get('device_fingerprint') != st.session_state.device_fingerprint:
-            cookies['device_fingerprint'] = st.session_state.device_fingerprint
-            cookies.save()
+            st.rerun() # 立刻重跑一次，確保頁面顯示的是剛獲取到的值
 
     # 無論如何，都顯示目前 session state 中的識別碼
+    # 如果還沒獲取到，顯示 "正在獲取中..."
     display_value = st.session_state.get('device_fingerprint', "正在獲取中... / Acquiring...")
-    st.text_input("設備識別碼 / Device Fingerprint", value=display_value, disabled=True, key="fingerprint_display")
+    st.text_input("設備識別碼 / Device Fingerprint", value=display_value, disabled=True)
 
     # --- 2. 主應用程式邏輯 ---
     if 'authenticated' not in st.session_state: st.session_state.authenticated = False
@@ -193,7 +180,6 @@ def main():
         elif message_type == "error": st.error(message_text)
         st.session_state.feedback_message = None
 
-    # --- Search and Confirmation Flow ---
     if not st.session_state.get('selected_employee_id'):
         st.session_state.search_term = st.text_input("請輸入您的員工編號或姓名 / Please enter your Employee ID or Name:", value=st.session_state.search_term, key="search_input").strip()
         if st.button("確認 / Confirm"):
@@ -217,7 +203,7 @@ def main():
                 else:
                     st.session_state.feedback_message = {"type": "error", "text": "查無此人，請確認輸入是否正確，或洽詢工作人員 / User not found, please check your input or contact staff."}
             st.rerun()
-    else: # An employee has been selected
+    else: 
         employee_id = st.session_state.selected_employee_id
         employee_row = df[df['EmployeeID'] == employee_id]
         if not employee_row.empty:
@@ -248,7 +234,6 @@ def handle_check_in(df, employee_row, row_index, client):
              st.error("無法確認報到，識別碼遺失，請刷新頁面再試一次。 / Cannot confirm, fingerprint is missing. Please refresh and try again.")
              return
 
-        # 檢查 Google Sheet 中是否已存在此指紋
         if 'DeviceFingerprint' in df.columns and not df[df['DeviceFingerprint'] == final_fingerprint].empty:
             st.session_state.feedback_message = {"type": "error", "text": "此裝置已完成報到 / This device has already been used for check-in."}
         else:
@@ -256,11 +241,9 @@ def handle_check_in(df, employee_row, row_index, client):
             tz = pytz.timezone(TIMEZONE)
             timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
             update_cell(client, "Event_Check-in", "Sheet1", row_index, 4, timestamp)
-            # 假設 DeviceFingerprint 在 F 欄 (第 6 欄)，請根據您的 Sheet 調整
             update_cell(client, "Event_Check-in", "Sheet1", row_index, 6, final_fingerprint)
             st.session_state.feedback_message = {"type": "success", "text": f"報到成功！歡迎 {name}，您的桌號在 {table_no} / Check-in successful! Welcome {name}, your table is {table_no}"}
 
-        # 只重設使用者相關的狀態，保留 fingerprint
         st.session_state.selected_employee_id = None
         st.session_state.search_term = ""
         st.rerun()
