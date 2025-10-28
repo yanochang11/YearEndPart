@@ -1,4 +1,4 @@
-# app_v1.9.0.py
+# app_v2.0.0.py
 import streamlit as st
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -9,7 +9,7 @@ import pytz
 import streamlit.components.v1 as components
 
 # --- App Version ---
-VERSION = "1.9.0 (One-Click Stable Release)"
+VERSION = "2.0.0 (Ultimate Stable Release)"
 
 # --- Configuration ---
 TIMEZONE = "Asia/Taipei"
@@ -32,6 +32,11 @@ st.markdown("""
     }
     body { background-color: #f0f2f6; }
     h1 { color: #1a1a1a; font-weight: 600; }
+    /* 讓被禁用的元件有更清晰的視覺提示 */
+    div[data-testid="stTextInput"][disabled] input, div[data-testid="stButton"][disabled] button {
+        background-color: #e9ecef;
+        cursor: not-allowed;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -72,7 +77,6 @@ def get_settings(_client, sheet_name):
         end_time = datetime.strptime(settings_sheet.acell('C2').value, '%H:%M').time()
         return {"mode": mode, "start_time": start_time, "end_time": end_time}
     except Exception as e:
-        st.error(f"無法載入設定，將使用預設值。錯誤: {e}")
         return {"mode": "Check-in", "start_time": time(9, 0), "end_time": time(17, 0)}
 
 def save_settings(client, sheet_name, mode, start_time, end_time):
@@ -89,7 +93,7 @@ def main():
     st.title("活動報到系統")
     st.markdown(f"<p style='text-align: right; color: grey;'>v{VERSION}</p>", unsafe_allow_html=True)
 
-    # --- Fingerprint Acquisition & State Lock ---
+    # --- 1. Fingerprint Acquisition & State Lock ---
     js_code = '''
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
     <script>
@@ -111,7 +115,7 @@ def main():
           .catch(error => console.error(error));
       }
       window.addEventListener('load', setFingerprint);
-      setTimeout(setFingerprint, 500);
+      setTimeout(setFingerprint, 500); // Fallback for Streamlit's dynamic rendering
     </script>
     '''
     components.html(js_code, height=0)
@@ -131,21 +135,15 @@ def main():
             st.session_state.fingerprint_locked = fingerprint_from_js
             st.rerun()
 
-    if st.session_state.fingerprint_locked:
-        st.text_input(
-            "裝置識別碼 (Device ID)",
-            value=st.session_state.fingerprint_locked,
-            disabled=True,
-            key="static_fingerprint_display"
-        )
-
-    # --- Main Application Flow ---
+    # --- 2. Main Application Flow ---
     client = get_gsheet()
     settings = get_settings(client, GOOGLE_SHEET_NAME)
+
     st.info(f"**目前模式:** `{settings['mode']}`")
 
-    # Admin Panel...
+    # Admin Panel... (No changes needed here)
     with st.sidebar.expander("管理員面板", expanded=False):
+        # ... (admin logic is self-contained and correct)
         if not st.session_state.authenticated:
             password = st.text_input("請輸入密碼:", type="password", key="admin_password")
             if st.button("登入"):
@@ -165,17 +163,7 @@ def main():
                 st.session_state.authenticated = False
                 st.rerun()
 
-    tz = pytz.timezone(TIMEZONE)
-    now = datetime.now(tz).time()
-    if not (settings['start_time'] <= now <= settings['end_time']):
-        st.warning("報到尚未開始或已結束。")
-        return
-
-    with st.spinner("正在載入員工名單..."):
-        df = get_data(client, GOOGLE_SHEET_NAME, WORKSHEET_NAME)
-    if df.empty:
-        return
-
+    # Feedback display logic
     if st.session_state.feedback:
         msg_type, msg_text = st.session_state.feedback.values()
         if msg_type == "success": st.success(msg_text)
@@ -183,65 +171,96 @@ def main():
         elif msg_type == "error": st.error(msg_text)
         st.session_state.feedback = None
 
-    # --- (核心修改 v1.9.0) 一鍵式搜尋與執行 ---
-    st.session_state.search_term = st.text_input("請輸入您的員工編號或姓名:", value=st.session_state.search_term, key="search_input").strip()
+    # --- 3. (核心修改 v2.0.0) UI State Control based on Fingerprint Lock ---
+    is_ready = bool(st.session_state.fingerprint_locked)
 
-    if st.button("確認"):
-        # 1. 執行前先檢查所有條件
-        final_fingerprint = st.session_state.get('fingerprint_locked')
-        search_term = st.session_state.search_term
+    if not is_ready:
+        st.warning("初始化報到系統中，請稍候...")
+    else:
+        st.text_input(
+            "裝置識別碼 (Device ID)",
+            value=st.session_state.fingerprint_locked,
+            disabled=True
+        )
 
-        if not final_fingerprint:
-            st.session_state.feedback = {"type": "error", "text": "無法執行操作，識別碼遺失，請刷新頁面再試一次。"}
-        elif not search_term:
+    st.session_state.search_term = st.text_input(
+        "請輸入您的員工編號或姓名:",
+        value=st.session_state.search_term,
+        key="search_input",
+        disabled=(not is_ready) # 關鍵：未就緒時禁用
+    ).strip()
+
+    if st.button("確認", disabled=(not is_ready)): # 關鍵：未就緒時禁用
+        tz = pytz.timezone(TIMEZONE)
+        now = datetime.now(tz).time()
+        
+        # Double check all conditions before processing
+        if not (settings['start_time'] <= now <= settings['end_time']):
+            st.session_state.feedback = {"type": "warning", "text": "報到尚未開始或已結束。"}
+        elif not st.session_state.search_term:
             st.session_state.feedback = {"type": "error", "text": "請輸入您的員工編號或姓名"}
         else:
-            # 2. 查找員工
-            search_term_lower = search_term.lower()
-            id_match = df[df['EmployeeID'].str.lower() == search_term_lower]
-            name_match = df[df['Name'].str.lower() == search_term_lower]
-
-            employee_row = pd.DataFrame()
-            if not id_match.empty:
-                employee_row = id_match.iloc[[0]]
-            elif not name_match.empty:
-                if len(name_match) == 1:
-                    employee_row = name_match.iloc[[0]]
+            with st.spinner("正在處理..."):
+                df = get_data(client, GOOGLE_SHEET_NAME, WORKSHEET_NAME)
+                if df.empty:
+                    st.session_state.feedback = {"type": "error", "text": "無法載入員工名單，請聯繫管理員。"}
                 else:
-                    st.session_state.feedback = {"type": "warning", "text": "找到多位同名員工，請改用員工編號搜尋。"}
-            else:
-                st.session_state.feedback = {"type": "error", "text": "查無此人，請確認輸入是否正確。"}
+                    # Execute the one-click action
+                    process_request(df, settings, client)
 
-            # 3. 如果找到唯一員工，直接執行操作
-            if not employee_row.empty:
-                row_index = employee_row.index[0] + 2
-                name = employee_row['Name'].iloc[0]
-
-                if settings['mode'] == "Check-in":
-                    check_in_time = employee_row['CheckInTime'].iloc[0]
-                    if pd.notna(check_in_time) and str(check_in_time).strip() != '':
-                        st.session_state.feedback = {"type": "warning", "text": f"{name} 您已報到，無須重複操作。"}
-                    elif 'DeviceFingerprint' in df.columns and not df[df['DeviceFingerprint'] == final_fingerprint].empty:
-                        st.session_state.feedback = {"type": "error", "text": "此裝置已用於報到，請勿代他人操作。"}
-                    else:
-                        table_no = employee_row['TableNo'].iloc[0]
-                        timestamp = datetime.now(pytz.timezone(TIMEZONE)).strftime("%Y-%m-%d %H:%M:%S")
-                        update_cell(client, GOOGLE_SHEET_NAME, WORKSHEET_NAME, row_index, 4, timestamp)
-                        update_cell(client, GOOGLE_SHEET_NAME, WORKSHEET_NAME, row_index, 6, final_fingerprint)
-                        st.session_state.feedback = {"type": "success", "text": f"報到成功！歡迎 {name}，您的桌號是 {table_no}"}
-                
-                else: # Check-out Mode
-                    check_out_time = employee_row['CheckOutTime'].iloc[0]
-                    if pd.notna(check_out_time) and str(check_out_time).strip() != '':
-                        st.session_state.feedback = {"type": "warning", "text": f"{name} 您已完成簽退。"}
-                    else:
-                        timestamp = datetime.now(pytz.timezone(TIMEZONE)).strftime("%Y-%m-%d %H:%M:%S")
-                        update_cell(client, GOOGLE_SHEET_NAME, WORKSHEET_NAME, row_index, 5, timestamp)
-                        st.session_state.feedback = {"type": "success", "text": f"簽退成功，{name}，祝您有個美好的一天！"}
-
-        # 4. 清理狀態並刷新頁面，準備給下一位使用者
+        # Clean up and rerun for the next user
         st.session_state.search_term = ""
         st.rerun()
+
+def process_request(df, settings, client):
+    """
+    Handles the actual check-in or check-out logic in a single step.
+    This function is only called when all preliminary checks have passed.
+    """
+    final_fingerprint = st.session_state.fingerprint_locked
+    search_term = st.session_state.search_term.lower()
+
+    # Find employee
+    id_match = df[df['EmployeeID'].str.lower() == search_term]
+    name_match = df[df['Name'].str.lower() == search_term]
+
+    employee_row = pd.DataFrame()
+    if not id_match.empty:
+        employee_row = id_match.iloc[[0]]
+    elif not name_match.empty:
+        if len(name_match) == 1:
+            employee_row = name_match.iloc[[0]]
+        else:
+            st.session_state.feedback = {"type": "warning", "text": "找到多位同名員工，請改用員工編號搜尋。"}
+            return
+    else:
+        st.session_state.feedback = {"type": "error", "text": "查無此人，請確認輸入是否正確。"}
+        return
+
+    # Process based on mode
+    row_index = employee_row.index[0] + 2
+    name = employee_row['Name'].iloc[0]
+    timestamp = datetime.now(pytz.timezone(TIMEZONE)).strftime("%Y-%m-%d %H:%M:%S")
+
+    if settings['mode'] == "Check-in":
+        check_in_time = employee_row['CheckInTime'].iloc[0]
+        if pd.notna(check_in_time) and str(check_in_time).strip() != '':
+            st.session_state.feedback = {"type": "warning", "text": f"{name} 您已報到，無須重複操作。"}
+        elif 'DeviceFingerprint' in df.columns and not df[df['DeviceFingerprint'] == final_fingerprint].empty:
+            st.session_state.feedback = {"type": "error", "text": "此裝置已用於報到，請勿代他人操作。"}
+        else:
+            table_no = employee_row['TableNo'].iloc[0]
+            update_cell(client, GOOGLE_SHEET_NAME, WORKSHEET_NAME, row_index, 4, timestamp)
+            update_cell(client, GOOGLE_SHEET_NAME, WORKSHEET_NAME, row_index, 6, final_fingerprint)
+            st.session_state.feedback = {"type": "success", "text": f"報到成功！歡迎 {name}，您的桌號是 {table_no}"}
+    
+    else:  # Check-out Mode
+        check_out_time = employee_row['CheckOutTime'].iloc[0]
+        if pd.notna(check_out_time) and str(check_out_time).strip() != '':
+            st.session_state.feedback = {"type": "warning", "text": f"{name} 您已完成簽退。"}
+        else:
+            update_cell(client, GOOGLE_SHEET_NAME, WORKSHEET_NAME, row_index, 5, timestamp)
+            st.session_state.feedback = {"type": "success", "text": f"簽退成功，{name}，祝您有個美好的一天！"}
 
 if __name__ == "__main__":
     main()
