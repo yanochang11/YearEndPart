@@ -1,4 +1,4 @@
-# app_v2.6.0.py
+# app_final_stable.py
 import streamlit as st
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -9,7 +9,7 @@ import pytz
 import streamlit.components.v1 as components
 
 # --- App Version ---
-VERSION = "2.6.0 (Final CSS Fix)"
+VERSION = "Final Stable Release"
 
 # --- Configuration ---
 TIMEZONE = "Asia/Taipei"
@@ -23,22 +23,16 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- Custom CSS ---
+# --- Custom CSS (From original app.py) ---
 st.markdown("""
 <style>
     .main .block-container {
-        padding-top: 1rem;
+        padding-top: 2rem;
         padding-bottom: 2rem;
     }
-    body { background-color: #f0f2f6; }
-    h1 { color: #1a1a1a; font-weight: 600; }
-    div[data-testid="stTextInput"][disabled] input, div[data-testid="stButton"][disabled] button {
-        background-color: #e9ecef;
-        cursor: not-allowed;
-    }
-    /* 關鍵修正：重新加入此 CSS 規則以隱藏底層的資料捕獲欄位 */
+    /* This rule correctly hides the underlying data capture field */
     div[data-testid="stTextInput"] input[placeholder="__fingerprint_placeholder__"] {
-        display: none !important;
+        display: none;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -56,20 +50,17 @@ def get_data(_client, sheet_name, worksheet_name):
         sheet = _client.open(sheet_name).worksheet(worksheet_name)
         data = get_as_dataframe(sheet, evaluate_formulas=True)
         for col in ['EmployeeID', 'DeviceFingerprint']:
-            if col in data.columns:
-                data[col] = data[col].astype(str).str.strip()
+            if col in data.columns: data[col] = data[col].astype(str).str.strip()
         return data.dropna(how='all')
     except Exception as e:
-        st.error(f"無法讀取資料表 '{sheet_name}/{worksheet_name}'。錯誤: {e}")
-        return pd.DataFrame()
+        st.error(f"無法讀取資料表 '{sheet_name}/{worksheet_name}'。錯誤: {e}"); return pd.DataFrame()
 
 def update_cell(client, sheet_name, worksheet_name, row, col, value):
     try:
         sheet = client.open(sheet_name).worksheet(worksheet_name)
         sheet.update_cell(row, col, value)
         get_data.clear()
-    except Exception as e:
-        st.error(f"更新 Google Sheet 失敗: {e}")
+    except Exception as e: st.error(f"更新 Google Sheet 失敗: {e}")
 
 @st.cache_data(ttl=60)
 def get_settings(_client, sheet_name):
@@ -88,14 +79,13 @@ def save_settings(client, sheet_name, mode, start_time, end_time):
         settings_sheet.update('A2:C2', [[mode, start_time.strftime('%H:%M'), end_time.strftime('%H:%M')]])
         get_settings.clear()
         st.success("設定已儲存!")
-    except Exception as e:
-        st.error(f"儲存設定失敗: {e}")
+    except Exception as e: st.error(f"儲存設定失敗: {e}")
 
 def main():
     st.title("活動報到系統")
     st.markdown(f"<p style='text-align: right; color: grey;'>v{VERSION}</p>", unsafe_allow_html=True)
 
-    # --- 1. 恢復您最原始、最穩定的 JavaScript 核心 ---
+    # --- 1. Your original, trusted JavaScript Core ---
     js_code = '''
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
     <script>
@@ -129,29 +119,27 @@ def main():
     '''
     components.html(js_code, height=0)
 
-    # 這個隱藏的溝通橋樑，現在會被上面的 CSS 規則正確隱藏
-    st.text_input("Device Fingerprint Hidden", key="device_fingerprint_hidden", label_visibility="hidden",
+    # The hidden input, correctly hidden by the CSS above
+    st.text_input("Device Fingerprint", key="device_fingerprint_hidden", label_visibility="hidden",
                   placeholder="__fingerprint_placeholder__")
 
+    # Initialize states
     for key in ['authenticated', 'search_term', 'feedback']:
         if key not in st.session_state:
             st.session_state[key] = None if key != 'search_term' else ""
 
-    # --- 2. 簡化後的 UI 顯示與狀態控制 ---
+    # --- 2. Corrected UI Display Logic ---
     fingerprint = st.session_state.get('device_fingerprint_hidden')
     is_ready = bool(fingerprint) and fingerprint != "__fingerprint_placeholder__"
-
     display_value = fingerprint if is_ready else "正在獲取中..."
     
-    # **畫面上永遠只有這一個「裝置識別碼」欄位**
     st.text_input(
         "裝置識別碼 (Device ID)",
         value=display_value,
-        disabled=True,
-        key="fingerprint_display_field"
+        disabled=True
     )
 
-    # --- 3. 主應用程式流程 ---
+    # --- 3. Main Application Flow ---
     client = get_gsheet()
     settings = get_settings(client, GOOGLE_SHEET_NAME)
     st.info(f"**目前模式:** `{settings['mode']}`")
@@ -180,7 +168,7 @@ def main():
         elif msg_type == "error": st.error(msg_text)
         st.session_state.feedback = None
 
-    # --- 4. 一鍵式報到 UI ---
+    # --- 4. One-Click Action UI ---
     st.session_state.search_term = st.text_input(
         "請輸入您的員工編號或姓名:",
         value=st.session_state.search_term,
