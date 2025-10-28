@@ -19,7 +19,6 @@ def get_gsheet():
         "type": st.secrets.gcp_service_account.type,
         "project_id": st.secrets.gcp_service_account.project_id,
         "private_key_id": st.secrets.gcp_service_account.private_key_id,
-        # 【修正】: 修正了 'ggcp_service_account' 的拼寫錯誤
         "private_key": st.secrets.gcp_service_account.private_key,
         "client_email": st.secrets.gcp_service_account.client_email,
         "client_id": st.secrets.gcp_service_account.client_id,
@@ -95,7 +94,6 @@ def main():
     st.title("Event Check-in/out System")
 
     # --- Device Fingerprint Handling ---
-    # JavaScript 程式碼，負責獲取識別碼並填入下面的隱藏元件
     js_code = '''
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
     <script>
@@ -132,7 +130,7 @@ def main():
     '''
     components.html(js_code, height=0)
 
-    # 隱藏的輸入元件，這是 JS 和 Python 之間唯一的溝通橋樑
+    # Hidden input component: This is the ONLY bridge between JS and Python.
     st.text_input("Device Fingerprint", key="device_fingerprint_hidden", label_visibility="hidden",
                   placeholder="__fingerprint_placeholder__")
 
@@ -141,6 +139,16 @@ def main():
     if 'search_term' not in st.session_state: st.session_state.search_term = ""
     if 'selected_employee_id' not in st.session_state: st.session_state.selected_employee_id = None
     if 'feedback_message' not in st.session_state: st.session_state.feedback_message = None
+    # 【關鍵修正 1】: 建立一個持久化的 session_state 來儲存指紋
+    if 'device_fingerprint' not in st.session_state:
+        st.session_state.device_fingerprint = None
+
+    # 【關鍵修正 2】: 捕獲指紋並存入持久化的 session_state
+    # 這個邏輯會在每次腳本重新執行時檢查，確保一旦獲取到指紋，就不會遺失
+    temp_fingerprint = st.session_state.get('device_fingerprint_hidden')
+    if temp_fingerprint and temp_fingerprint != "__fingerprint_placeholder__":
+        if st.session_state.device_fingerprint is None:
+            st.session_state.device_fingerprint = temp_fingerprint
 
     GOOGLE_SHEET_NAME = "Event_Check-in"
     WORKSHEET_NAME = "Sheet1"
@@ -238,24 +246,29 @@ def handle_check_in(df, employee_row, row_index, client):
     employee_id = employee_row['EmployeeID'].iloc[0]
     st.info(f"正在為 **{name}** ({employee_id}) 辦理報到手續。 / Processing check-in for **{name}** ({employee_id}).")
 
-    # 【關鍵修正】: 我們只從 `device_fingerprint_hidden` 這唯一的真相來源讀取狀態
-    fingerprint = st.session_state.get('device_fingerprint_hidden')
+    # 【關鍵修正 3】: 從我們持久化的 session_state 讀取指紋
+    fingerprint = st.session_state.get('device_fingerprint')
 
-    # 檢查讀取到的值是否有效
-    if not fingerprint or fingerprint == "__fingerprint_placeholder__":
-        st.text_input("設備識別碼 / Device Fingerprint", "正在獲取中... / Acquiring...", disabled=True)
+    # 檢查指紋是否已成功獲取
+    if not fingerprint:
         st.warning("正在識別您的裝置，請稍候... / Identifying your device, please wait...")
-        # 我們不再手動刷新，而是信任 Streamlit 在 JS 更新值後會自動刷新
+        # 顯示一個無法編輯的等待訊息
+        st.text_input("設備識別碼 / Device Fingerprint", "正在獲取中... / Acquiring...", disabled=True)
+        # 重新執行一次腳本，給予 JS 更多時間來抓取並透過【關鍵修正 2】的邏輯寫入 session_state
+        st.rerun()
         return
-    
+
     # 如果程式能執行到這裡，代表 fingerprint 已經成功獲取
+    # 顯示指紋，並設定為 disabled，讓使用者無法修改
     st.text_input("設備識別碼 / Device Fingerprint", value=fingerprint, disabled=True)
 
     if st.button("✅ 確認報到 / Confirm Check-in"):
-        # 按下按鈕時，再次從唯一的真相來源讀取一次，確保拿到的是最新的值，解決狀態遺失問題
-        final_fingerprint = st.session_state.get('device_fingerprint_hidden')
-        if not final_fingerprint or final_fingerprint == "__fingerprint_placeholder__":
-             st.error("無法確認報到，識別碼遺失，請刷新頁面再試一次。")
+        # 直接使用我們已安全儲存的指紋
+        final_fingerprint = st.session_state.get('device_fingerprint')
+        
+        # 再次確認以防萬一
+        if not final_fingerprint:
+             st.error("無法確認報到，識別碼遺失，請刷新頁面再試一次。 / Cannot confirm, fingerprint is missing. Please refresh and try again.")
              return
 
         if 'DeviceFingerprint' in df.columns and not df[df['DeviceFingerprint'] == final_fingerprint].empty:
@@ -268,9 +281,11 @@ def handle_check_in(df, employee_row, row_index, client):
             update_cell(client, "Event_Check-in", "Sheet1", row_index, 6, final_fingerprint)
             st.session_state.feedback_message = {"type": "success", "text": f"報到成功！歡迎 {name}，您的桌號在 {table_no} / Check-in successful! Welcome {name}, your table is {table_no}"}
 
-        # 重設狀態，準備給下一位使用者
+        # 【關鍵修正 4】: 重設所有狀態，準備給下一位使用者
         st.session_state.selected_employee_id = None
         st.session_state.search_term = ""
+        st.session_state.device_fingerprint = None
+        st.session_state.device_fingerprint_hidden = "" # 也清除隱藏元件的狀態
         st.rerun()
 
 def handle_check_out(employee_row, row_index, client):
