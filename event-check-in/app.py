@@ -87,32 +87,32 @@ def save_settings(client, sheet_name, mode, start_time, end_time):
 def get_fingerprint_component():
     """
     Renders a robust JavaScript component to get the device fingerprint.
+    It now polls for the Streamlit object to ensure it's ready.
     """
     js_code = """
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
     <script>
-      function setFingerprint() {
-        // Ensure Streamlit object is available
+      // Function to get the fingerprint and send it to Streamlit
+      const getFingerprint = () => {
+        (async () => {
+          try {
+            const fp = await FingerprintJS.load();
+            const result = await fp.get();
+            Streamlit.setComponentValue(result.visitorId);
+          } catch (error) {
+            console.error("FingerprintJS error:", error);
+            Streamlit.setComponentValue("error");
+          }
+        })();
+      };
+
+      // Poll to check if the Streamlit object is available
+      const intervalId = setInterval(() => {
         if (window.Streamlit) {
-          (async () => {
-            try {
-              const fp = await FingerprintJS.load();
-              const result = await fp.get();
-              // Send the result back to Streamlit
-              Streamlit.setComponentValue(result.visitorId);
-            } catch (error) {
-              console.error("FingerprintJS error:", error);
-              Streamlit.setComponentValue("error");
-            }
-          })();
+          clearInterval(intervalId); // Stop polling
+          getFingerprint();        // Run the function
         }
-      }
-
-      // Add an event listener to run the function when the component is ready
-      window.addEventListener("streamlit:component_ready", setFingerprint);
-
-      // As a fallback, in case the event doesn't fire, try to run it after a short delay
-      setTimeout(setFingerprint, 50);
+      }, 100); // Check every 100ms
     </script>
     """
     return components.html(js_code, height=0)
