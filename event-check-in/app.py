@@ -1,4 +1,4 @@
-# app_v2.2.0.py
+# app_v2.3.0.py
 import streamlit as st
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -9,7 +9,7 @@ import pytz
 import streamlit.components.v1 as components
 
 # --- App Version ---
-VERSION = "2.2.0 (Corrected State Release)"
+VERSION = "2.3.0 (Reliable Fingerprint)"
 
 # --- Configuration ---
 TIMEZONE = "Asia/Taipei"
@@ -36,16 +36,6 @@ st.markdown("""
         background-color: #e9ecef;
         cursor: not-allowed;
     }
-    /* Hide the fingerprint input completely */
-    input[placeholder="__fingerprint_placeholder__"] {
-        position: absolute;
-        top: -9999px;
-        left: -9999px;
-        width: 0;
-        height: 0;
-        opacity: 0;
-        z-index: -1;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -66,7 +56,7 @@ def get_data(_client, sheet_name, worksheet_name):
                 data[col] = data[col].astype(str).str.strip()
         return data.dropna(how='all')
     except Exception as e:
-        st.error(f"無法讀取資料表 '{sheet_name}/{worksheet_name}'。錯誤: {e}")
+        st.error(f"無法讀取資料表 / Could not read worksheet '{sheet_name}/{worksheet_name}'. Error: {e}")
         return pd.DataFrame()
 
 def update_cell(client, sheet_name, worksheet_name, row, col, value):
@@ -75,7 +65,7 @@ def update_cell(client, sheet_name, worksheet_name, row, col, value):
         sheet.update_cell(row, col, value)
         get_data.clear()
     except Exception as e:
-        st.error(f"更新 Google Sheet 失敗: {e}")
+        st.error(f"更新 Google Sheet 失敗 / Failed to update Google Sheet: {e}")
 
 @st.cache_data(ttl=60)
 def get_settings(_client, sheet_name):
@@ -93,53 +83,68 @@ def save_settings(client, sheet_name, mode, start_time, end_time):
         settings_sheet = client.open(sheet_name).worksheet("Settings")
         settings_sheet.update('A2:C2', [[mode, start_time.strftime('%H:%M'), end_time.strftime('%H:%M')]])
         get_settings.clear()
-        st.success("設定已儲存!")
+        st.success("設定已儲存! / Settings saved!")
     except Exception as e:
-        st.error(f"儲存設定失敗: {e}")
+        st.error(f"儲存設定失敗 / Failed to save settings: {e}")
+
+# --- Callback and State Initialization ---
+
+def handle_fingerprint_update():
+    """Callback function to update the readiness state."""
+    if st.session_state.device_fingerprint_receiver:
+        st.session_state.is_ready = True
 
 def main():
     st.title("活動報到系統 / Event Check-in System")
     st.markdown(f"<p style='text-align: right; color: grey;'>v{VERSION}</p>", unsafe_allow_html=True)
 
-    # --- 1. Fingerprint Acquisition ---
-    js_code = '''
-    <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
-    <script>
-      function setFingerprint() {
-        const fpPromise = FingerprintJS.load();
-        fpPromise
-          .then(fp => fp.get())
-          .then(result => {
-            const visitorId = result.visitorId;
-            const input = window.parent.document.querySelector('input[placeholder="__fingerprint_placeholder__"]');
-            if (input && (input.value === "" || input.value === "__fingerprint_placeholder__")) {
-                input.value = visitorId;
-                const event = new Event('input', { bubbles: true });
-                input.dispatchEvent(event);
-            }
-          })
-          .catch(error => console.error(error));
-      }
-      window.addEventListener('load', setFingerprint);
-      setTimeout(setFingerprint, 500);
-    </script>
-    '''
-    components.html(js_code, height=0)
-
-    st.text_input("Device Fingerprint Hidden", key="device_fingerprint_hidden", label_visibility="hidden",
-                  placeholder="__fingerprint_placeholder__")
-
-    for key in ['authenticated', 'search_term', 'feedback']:
+    # Initialize state variables
+    for key, default_value in [('authenticated', False), ('search_term', ''), ('feedback', None), ('is_ready', False)]:
         if key not in st.session_state:
-            st.session_state[key] = None if key != 'search_term' else ""
+            st.session_state[key] = default_value
+    if 'device_fingerprint_receiver' not in st.session_state:
+        st.session_state.device_fingerprint_receiver = ""
 
-    # --- 2. (核心修正 v2.2.0) Determine UI readiness and display ---
-    fingerprint = st.session_state.get('device_fingerprint_hidden')
-    # 系統是否就緒，取決於是否成功獲取到識別碼
-    is_ready = bool(fingerprint) and fingerprint != "__fingerprint_placeholder__"
+    # --- 1. Fingerprint Acquisition ---
+    st.text_input(
+        label="Device Fingerprint Receiver",
+        key="device_fingerprint_receiver",
+        on_change=handle_fingerprint_update,
+        label_visibility="collapsed"
+    )
 
+    # Use st.markdown to inject script directly into the main page head
+    st.markdown(
+        """
+        <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
+        <script>
+          function setFingerprintWhenReady() {
+            const fpPromise = FingerprintJS.load();
+            fpPromise
+              .then(fp => fp.get())
+              .then(result => {
+                const visitorId = result.visitorId;
+                const intervalId = setInterval(() => {
+                  // No need for window.parent, as we are in the same document
+                  const inputElement = document.querySelector('input[aria-label="Device Fingerprint Receiver"]');
+                  if (inputElement) {
+                    clearInterval(intervalId);
+                    inputElement.value = visitorId;
+                    const event = new Event('change', { bubbles: true });
+                    inputElement.dispatchEvent(event);
+                  }
+                }, 150); // Slightly increased interval
+              })
+              .catch(err => console.error('FingerprintJS error:', err));
+          }
+          // Ensure the script runs after the DOM is fully loaded
+          window.addEventListener('load', setFingerprintWhenReady);
+        </script>
+        """,
+        unsafe_allow_html=True
+    )
 
-    # --- 3. Main Application Flow ---
+    # --- 2. Main Application Flow ---
     client = get_gsheet()
     settings = get_settings(client, GOOGLE_SHEET_NAME)
     st.info(f"**目前模式 / Current Mode:** `{settings['mode']}`")
@@ -168,17 +173,18 @@ def main():
         elif msg_type == "error": st.error(msg_text)
         st.session_state.feedback = None
 
-    # --- 4. One-Click Action UI (Corrected disabled logic) ---
+    # --- 3. One-Click Action UI (Corrected disabled logic) ---
     st.session_state.search_term = st.text_input(
         "請輸入您的員工編號或姓名 / Please enter your Employee ID or Name:",
         value=st.session_state.search_term,
         key="search_input",
-        disabled=not is_ready # **修正點**: 系統未就緒時，禁用此欄位
+        disabled=not st.session_state.is_ready
     ).strip()
 
-    if st.button("確認 / Confirm", disabled=not is_ready): # **修正點**: 系統未就緒時，禁用此按鈕
+    if st.button("確認 / Confirm", disabled=not st.session_state.is_ready):
         tz = pytz.timezone(TIMEZONE)
         now = datetime.now(tz).time()
+        fingerprint = st.session_state.device_fingerprint_receiver
 
         if not (settings['start_time'] <= now <= settings['end_time']):
             st.session_state.feedback = {"type": "warning", "text": "報到尚未開始或已結束 / Check-in is not yet open or has already closed."}
