@@ -94,31 +94,48 @@ def main():
         st.session_state.device_fingerprint = None
 
     if st.session_state.device_fingerprint is None:
+        # 【關鍵修正】: JS 現在會主動等待 Streamlit 準備就緒
         js_code = '''
         <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
         <script>
           (async () => {
-            await new Promise(resolve => setTimeout(resolve, 500));
+            // Function to wait until Streamlit is ready
+            async function streamlitReady() {
+              return new Promise((resolve) => {
+                const interval = setInterval(() => {
+                  if (window.parent.Streamlit) {
+                    clearInterval(interval);
+                    resolve();
+                  }
+                }, 50); // Check every 50ms
+              });
+            }
+
             try {
+              // Wait for the Streamlit object to be available
+              await streamlitReady();
+
               const fp = await FingerprintJS.load();
               const result = await fp.get();
+              // Now it's safe to call setComponentValue
               window.parent.Streamlit.setComponentValue(result.visitorId);
             } catch (error) {
               console.error('FingerprintJS error:', error);
-              window.parent.Streamlit.setComponentValue(null);
+              if (window.parent.Streamlit) {
+                window.parent.Streamlit.setComponentValue(null);
+              }
             }
           })();
         </script>
         '''
         fingerprint_from_js = components.html(js_code, height=0)
 
-        # 【關鍵修正】: 只有當回傳值是有效的字串時，才將其存儲並重跑
         if isinstance(fingerprint_from_js, str) and fingerprint_from_js:
             st.session_state.device_fingerprint = fingerprint_from_js
             st.rerun()
 
     display_value = st.session_state.get('device_fingerprint', "正在獲取中... / Acquiring...")
-    st.text_input("設備識別碼 / Device Fingerprint", value=display_value, disabled=True, key="fingerprint_display_field")
+    st.text_input("設備識別碼 / Device Fingerprint", value=display_value, disabled=True)
 
     # --- 2. 主應用程式邏輯 ---
     if 'authenticated' not in st.session_state: st.session_state.authenticated = False
