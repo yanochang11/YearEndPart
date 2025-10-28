@@ -1,4 +1,4 @@
-# app_v1.0.3.py
+# app_v1.0.4.py
 import streamlit as st
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -9,7 +9,7 @@ import pytz
 import streamlit.components.v1 as components
 
 # --- App Version ---
-VERSION = "1.0.3"
+VERSION = "1.0.4"
 
 # --- Configuration ---
 TIMEZONE = "Asia/Taipei"
@@ -25,13 +25,9 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- Custom CSS for better UI ---
+# --- Custom CSS (已移除背景顏色設定) ---
 st.markdown("""
 <style>
-    .stApp {
-        background-color: #f0f2f6;
-        text-align: center;
-    }
     .main .block-container {
         padding-top: 2rem;
         padding-bottom: 2rem;
@@ -44,7 +40,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# --- Google Sheets Connection (採用您版本中的程式碼) ---
+# --- Google Sheets Connection ---
 @st.cache_resource(ttl=600)
 def get_gsheet():
     """Establishes a connection to the Google Sheet using cached credentials."""
@@ -88,7 +84,7 @@ def update_cell(client, sheet_name, worksheet_name, row, col, value):
     except Exception as e:
         st.error(f"更新 Google Sheet 失敗: {e}")
 
-# --- Settings Management (採用您版本中的程式碼) ---
+# --- Settings Management ---
 @st.cache_data(ttl=60)
 def get_settings(_client, sheet_name):
     """Fetches settings from the 'Settings' worksheet."""
@@ -119,7 +115,7 @@ def main():
     st.title("活動報到系統")
     st.markdown(f"<p style='text-align: right; color: grey;'>v{VERSION}</p>", unsafe_allow_html=True)
 
-    # --- Device Fingerprint Handling (完全採用您指定的程式碼) ---
+    # --- Device Fingerprint Handling ---
     js_code = '''
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
     <script>
@@ -168,7 +164,6 @@ def main():
     st.info(f"**目前模式:** `{settings['mode']}`")
 
     with st.sidebar.expander("管理員面板", expanded=False):
-        # ... (管理員面板邏輯維持不變)
         if not st.session_state.authenticated:
             password = st.text_input("請輸入密碼:", type="password")
             if st.button("登入"):
@@ -187,7 +182,6 @@ def main():
             if st.button("登出"):
                 st.session_state.authenticated = False
                 st.rerun()
-
 
     tz = pytz.timezone(TIMEZONE)
     now = datetime.now(tz).time()
@@ -242,7 +236,7 @@ def main():
                 handle_check_out(employee_row, row_index, client)
 
 def handle_check_in(df, employee_row, row_index, client):
-    """Handles the check-in process (採用您版本中的邏輯)."""
+    """Handles the check-in process."""
     name = employee_row['Name'].iloc[0]
     employee_id = employee_row['EmployeeID'].iloc[0]
     st.subheader(f"確認報到資訊: {name} ({employee_id})")
@@ -256,7 +250,6 @@ def handle_check_in(df, employee_row, row_index, client):
         st.rerun()
         return
 
-    # 唯一的真相來源：從隱藏元件讀取識別碼
     fingerprint = st.session_state.get('device_fingerprint_hidden')
 
     if not fingerprint or fingerprint == "__fingerprint_placeholder__":
@@ -267,7 +260,6 @@ def handle_check_in(df, employee_row, row_index, client):
     st.text_input("裝置識別碼 (Device ID)", value=fingerprint, disabled=True)
 
     if st.button("✅ 確認報到"):
-        # 再次從真相來源確認識別碼
         final_fingerprint = st.session_state.get('device_fingerprint_hidden')
         if not final_fingerprint or final_fingerprint == "__fingerprint_placeholder__":
             st.session_state.feedback = {"type": "error", "text": "無法確認報到，識別碼遺失，請刷新頁面再試一次。"}
@@ -280,7 +272,7 @@ def handle_check_in(df, employee_row, row_index, client):
             tz = pytz.timezone(TIMEZONE)
             timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
             update_cell(client, GOOGLE_SHEET_NAME, WORKSHEET_NAME, row_index, 4, timestamp)
-            update_cell(client, GOOGLE_SHEET_NAME, WORKSHEET_NAME, row_index, 6, final_fingerprint) # 新增寫入識別碼
+            update_cell(client, GOOGLE_SHEET_NAME, WORKSHEET_NAME, row_index, 6, final_fingerprint)
             st.session_state.feedback = {"type": "success", "text": f"報到成功！歡迎 {name}，您的桌號是 {table_no}"}
             st.session_state.sound_to_play = SUCCESS_SOUND_URL
 
