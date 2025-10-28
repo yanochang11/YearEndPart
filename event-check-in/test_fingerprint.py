@@ -1,70 +1,52 @@
 import streamlit as st
 import streamlit.components.v1 as components
 
-st.set_page_config(page_title="Fingerprint Object Inspector", layout="centered")
+st.set_page_config(page_title="Fingerprint URL Test", layout="centered")
 
-st.title("Fingerprint Object Inspector 🕵️")
-st.markdown("Let's look inside the object that Streamlit is returning.")
+st.title("Fingerprint URL 傳遞測試 🚀")
+st.markdown("這個版本將使用 URL 參數來傳遞識別碼，這是最穩定的方法。")
 
-def get_fingerprint_component():
-    """Renders the JavaScript component."""
+# --- 關鍵修改：Python 檢查 URL ---
+query_params = st.experimental_get_query_params()
+fingerprint_from_url = query_params.get("fingerprint", [None])[0]
+
+# --- 如果 URL 中已經有 fingerprint，代表成功了 ---
+if fingerprint_from_url:
+    st.success("🎉🎉🎉 最終成功！已從 URL 獲取 Fingerprint 字串！")
+    st.code(fingerprint_from_url, language=None)
+    st.info("現在，請將此邏輯應用回您的主程式中。")
+
+# --- 如果 URL 中沒有，才顯示 JS 元件讓它去獲取 ---
+else:
+    st.warning("🔄 正在執行前端腳本以獲取 Fingerprint...")
+    st.info("頁面將會自動重新整理一次。")
+    
+    # --- 關鍵修改：JavaScript 修改 URL ---
     js_code = """
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
     <script>
-      (function() {
-        if (window.fingerprintSent) { return; }
-        window.fingerprintSent = true;
-        const getAndSendFingerprint = async () => {
-          try {
-            while (!window.Streamlit) {
-              await new Promise(resolve => setTimeout(resolve, 50));
-            }
-            const fp = await FingerprintJS.load();
-            const result = await fp.get();
-            window.Streamlit.setComponentValue(result.visitorId);
-          } catch (error) {
-            console.error("FingerprintJS error:", error);
-            if (window.Streamlit) {
-              window.Streamlit.setComponentValue({ "error": error.message });
-            }
-          }
-        };
-        getAndSendFingerprint();
+      (async () => {
+        // 檢查 URL，如果已經有 fingerprint，就不再執行
+        const currentUrl = new URL(window.location.href);
+        if (currentUrl.searchParams.has('fingerprint')) {
+          return;
+        }
+
+        try {
+          const fp = await FingerprintJS.load();
+          const result = await fp.get();
+          
+          // 將 fingerprint 作為 URL 參數加上去
+          currentUrl.searchParams.set('fingerprint', result.visitorId);
+          
+          // 重新導向到新的 URL，這會觸發 Streamlit 的重新整理
+          window.location.href = currentUrl.toString();
+
+        } catch (error) {
+          console.error("FingerprintJS error:", error);
+          // 可以在這裡顯示錯誤訊息
+        }
       })();
     </script>
     """
-    return components.html(js_code, height=0)
-
-# --- Main Logic ---
-st.header("Inspection Results")
-
-if 'component_object' not in st.session_state:
-    st.session_state.component_object = None
-
-if st.session_state.component_object is None:
-    returned_value = get_fingerprint_component()
-    if returned_value:
-        st.session_state.component_object = returned_value
-        st.rerun()
-
-if st.session_state.component_object:
-    st.success("✅ Object received from the component!")
-    
-    st.subheader("Object's Internal Attributes:")
-    st.write(
-        "We are looking for an attribute that holds the fingerprint string "
-        "(a long series of letters and numbers)."
-    )
-    
-    # This is the key part: vars() lists all internal attributes of the object.
-    try:
-        attributes = vars(st.session_state.component_object)
-        st.json(attributes)
-    except TypeError:
-        st.warning("`vars()` could not inspect the object. Let's try `dir()`.")
-        # As a fallback, dir() lists all methods and attributes.
-        attributes = dir(st.session_state.component_object)
-        st.write(attributes)
-
-else:
-    st.warning("🔄 Waiting to receive the object from the frontend...")
+    components.html(js_code, height=0)
