@@ -1,4 +1,4 @@
-# app_v2.4.0.py
+# app_v2.5.0.py
 import streamlit as st
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -9,7 +9,7 @@ import pytz
 import streamlit.components.v1 as components
 
 # --- App Version ---
-VERSION = "2.4.0 (Original JS Core Release)"
+VERSION = "2.5.0 (Final & Stable)"
 
 # --- Configuration ---
 TIMEZONE = "Asia/Taipei"
@@ -91,7 +91,7 @@ def main():
     st.title("活動報到系統")
     st.markdown(f"<p style='text-align: right; color: grey;'>v{VERSION}</p>", unsafe_allow_html=True)
 
-    # --- 1. (核心修正 v2.4.0) 恢復您最原始、最穩定的 JavaScript 程式碼 ---
+    # --- 1. 恢復您最原始、最穩定的 JavaScript 核心 ---
     js_code = '''
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
     <script>
@@ -115,7 +115,6 @@ def main():
                     clearInterval(intervalId);
                 } else if (attempts >= maxAttempts) {
                     clearInterval(intervalId);
-                    console.error('Failed to find the fingerprint input field.');
                 }
             }, 100);
           })
@@ -126,27 +125,31 @@ def main():
     '''
     components.html(js_code, height=0)
 
+    # 隱藏的溝通橋樑，作為唯一的事實來源
     st.text_input("Device Fingerprint Hidden", key="device_fingerprint_hidden", label_visibility="hidden",
                   placeholder="__fingerprint_placeholder__")
 
+    # 初始化 session state
     for key in ['authenticated', 'search_term', 'feedback']:
         if key not in st.session_state:
             st.session_state[key] = None if key != 'search_term' else ""
 
-    # --- 2. 採用 v2.3.0 已修正的統一顯示邏輯 ---
+    # --- 2. 簡化後的 UI 顯示與狀態控制 ---
     fingerprint = st.session_state.get('device_fingerprint_hidden')
     is_ready = bool(fingerprint) and fingerprint != "__fingerprint_placeholder__"
 
+    # 決定顯示的值：如果系統就緒，顯示識別碼；否則顯示提示文字
     display_value = fingerprint if is_ready else "正在獲取中..."
     
+    # **畫面上永遠只有這一個「裝置識別碼」欄位**
     st.text_input(
         "裝置識別碼 (Device ID)",
         value=display_value,
-        disabled=True,
+        disabled=True,  # 此欄位永遠不可編輯
         key="fingerprint_display_field"
     )
 
-    # --- 3. Main Application Flow ---
+    # --- 3. 主應用程式流程 ---
     client = get_gsheet()
     settings = get_settings(client, GOOGLE_SHEET_NAME)
     st.info(f"**目前模式:** `{settings['mode']}`")
@@ -175,15 +178,15 @@ def main():
         elif msg_type == "error": st.error(msg_text)
         st.session_state.feedback = None
 
-    # --- 4. One-Click Action UI ---
+    # --- 4. 一鍵式報到 UI ---
     st.session_state.search_term = st.text_input(
         "請輸入您的員工編號或姓名:",
         value=st.session_state.search_term,
         key="search_input",
-        disabled=not is_ready
+        disabled=not is_ready # **關鍵**：系統未就緒時，禁用此欄位
     ).strip()
 
-    if st.button("確認", disabled=not is_ready):
+    if st.button("確認", disabled=not is_ready): # **關鍵**：系統未就緒時，禁用此按鈕
         tz = pytz.timezone(TIMEZONE)
         now = datetime.now(tz).time()
 
