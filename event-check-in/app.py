@@ -118,7 +118,7 @@ def main():
             st.rerun()
 
     display_value = st.session_state.get('device_fingerprint', "正在獲取中... / Acquiring...")
-    st.text_input("設備識別碼 / Device Fingerprint", value=display_value, disabled=True)
+    st.text_input("設備識別碼 / Device Fingerprint", value=display_value, disabled=True, key="fingerprint_display_field")
 
     # --- 2. 主應用程式邏輯 ---
     if 'authenticated' not in st.session_state: st.session_state.authenticated = False
