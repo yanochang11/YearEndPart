@@ -91,7 +91,6 @@ def get_fingerprint_component():
     js_code = """
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
     <script>
-      // Self-executing function with a flag to ensure it runs only once
       (function() {
         if (window.fingerprintSent) {
           return;
@@ -100,14 +99,18 @@ def get_fingerprint_component():
 
         const getAndSendFingerprint = async () => {
           try {
-            // Actively wait for the Streamlit object to become available
             while (!window.Streamlit) {
               await new Promise(resolve => setTimeout(resolve, 50));
             }
 
             const fp = await FingerprintJS.load();
             const result = await fp.get();
-            Streamlit.setComponentValue(result.visitorId);
+            
+            // Add a small delay to ensure the frontend is ready before sending
+            setTimeout(() => {
+                Streamlit.setComponentValue(result.visitorId);
+            }, 200);
+
           } catch (error) {
             console.error("FingerprintJS error:", error);
             if (window.Streamlit) {
@@ -120,38 +123,39 @@ def get_fingerprint_component():
       })();
     </script>
     """
-    # Call components.html without the 'key' argument
     return components.html(js_code, height=0)
 
 def main():
     """Main function to run the Streamlit application."""
     st.set_page_config(page_title="Event Check-in/out System", initial_sidebar_state="collapsed")
 
-    # --- Initialization Logic ---
-    if 'device_fingerprint' not in st.session_state:
+    # --- Robust Initialization Logic with State Flag ---
+    if 'fingerprint_initialized' not in st.session_state:
+        st.session_state.fingerprint_initialized = False
         st.session_state.device_fingerprint = None
-
-    # This component will return a value once the JS runs in the browser
-    fingerprint_value = get_fingerprint_component()
-
-    # If we haven't stored the fingerprint yet, and the component returned a value
-    if st.session_state.device_fingerprint is None and fingerprint_value:
-        st.session_state.device_fingerprint = fingerprint_value
-        st.rerun() # Rerun the script to move past the initialization phase
-
-    # Show loading message until the fingerprint is received
-    if st.session_state.device_fingerprint is None:
-        st.info("🔄 正在初始化報到系統，請稍候...")
-        st.info("🔄 Initializing the check-in system, please wait...")
-        return
+    
+    # If not initialized, try to get the fingerprint
+    if not st.session_state.fingerprint_initialized:
+        fingerprint_value = get_fingerprint_component()
+        
+        # If the component returns a value, it means JS has sent it
+        if fingerprint_value:
+            st.session_state.device_fingerprint = fingerprint_value
+            st.session_state.fingerprint_initialized = True
+            st.rerun() # Immediately rerun to show the main app
+        # If no value yet, just show the loading message and wait for the next rerun
+        else:
+            st.info("🔄 正在初始化報到系統，請稍候...")
+            st.info("🔄 Initializing the check-in system, please wait...")
+            return
 
     if st.session_state.device_fingerprint == "error":
         st.error("無法取得裝置識別碼，請重新整理頁面或聯繫工作人員。")
         return
 
+    # --- Main Application Logic ---
     st.title("Event Check-in/out System")
 
-    # --- Initialize other session state variables ---
     if 'authenticated' not in st.session_state: st.session_state.authenticated = False
     if 'search_term' not in st.session_state: st.session_state.search_term = ""
     if 'selected_employee_id' not in st.session_state: st.session_state.selected_employee_id = None
