@@ -1,4 +1,4 @@
-# app_v1.0.2.py
+# app_v1.0.3.py
 import streamlit as st
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -9,7 +9,7 @@ import pytz
 import streamlit.components.v1 as components
 
 # --- App Version ---
-VERSION = "1.0.2"
+VERSION = "1.0.3"
 
 # --- Configuration ---
 TIMEZONE = "Asia/Taipei"
@@ -30,12 +30,13 @@ st.markdown("""
 <style>
     .stApp {
         background-color: #f0f2f6;
+        text-align: center;
     }
     .main .block-container {
         padding-top: 2rem;
         padding-bottom: 2rem;
     }
-    /* Make the hidden input truly invisible */
+    /* 使隱藏輸入框在視覺上不可見 */
     div[data-testid="stTextInput"] input[placeholder="__fingerprint_placeholder__"] {
         display: none;
     }
@@ -43,10 +44,10 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# --- Google Sheets Connection ---
+# --- Google Sheets Connection (採用您版本中的程式碼) ---
 @st.cache_resource(ttl=600)
-def get_gsheet_client():
-    """Establishes a connection to Google Sheets using cached credentials."""
+def get_gsheet():
+    """Establishes a connection to the Google Sheet using cached credentials."""
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds_dict = {
         "type": st.secrets.gcp_service_account.type,
@@ -66,10 +67,10 @@ def get_gsheet_client():
 
 @st.cache_data(ttl=30)
 def get_data(_client, sheet_name, worksheet_name):
-    """Fetches data from the worksheet and caches it for a short time."""
+    """Fetches data from the worksheet and caches it."""
     try:
         sheet = _client.open(sheet_name).worksheet(worksheet_name)
-        data = get_as_dataframe(sheet, evaluate_formulas=True)
+        data = get_as_dataframe(sheet)
         for col in ['EmployeeID', 'DeviceFingerprint']:
             if col in data.columns:
                 data[col] = data[col].astype(str).str.strip()
@@ -79,7 +80,7 @@ def get_data(_client, sheet_name, worksheet_name):
         return pd.DataFrame()
 
 def update_cell(client, sheet_name, worksheet_name, row, col, value):
-    """Updates a single cell and clears relevant caches."""
+    """Updates a single cell and clears caches."""
     try:
         sheet = client.open(sheet_name).worksheet(worksheet_name)
         sheet.update_cell(row, col, value)
@@ -87,7 +88,7 @@ def update_cell(client, sheet_name, worksheet_name, row, col, value):
     except Exception as e:
         st.error(f"更新 Google Sheet 失敗: {e}")
 
-# --- Settings Management ---
+# --- Settings Management (採用您版本中的程式碼) ---
 @st.cache_data(ttl=60)
 def get_settings(_client, sheet_name):
     """Fetches settings from the 'Settings' worksheet."""
@@ -113,12 +114,12 @@ def save_settings(client, sheet_name, mode, start_time, end_time):
     except Exception as e:
         st.error(f"儲存設定失敗: {e}")
 
-# --- Core Application Logic ---
 def main():
+    """Main function to run the Streamlit application."""
     st.title("活動報到系統")
     st.markdown(f"<p style='text-align: right; color: grey;'>v{VERSION}</p>", unsafe_allow_html=True)
 
-    # --- (Restore Original Fingerprint Method) ---
+    # --- Device Fingerprint Handling (完全採用您指定的程式碼) ---
     js_code = '''
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
     <script>
@@ -152,32 +153,22 @@ def main():
     '''
     components.html(js_code, height=0)
 
-    # Hidden input to receive the fingerprint from JavaScript
     st.text_input("Device Fingerprint", key="device_fingerprint_hidden", label_visibility="hidden",
                   placeholder="__fingerprint_placeholder__")
 
-    # --- Initialize session state ---
+    # --- App State Initialization ---
     if 'authenticated' not in st.session_state: st.session_state.authenticated = False
     if 'search_term' not in st.session_state: st.session_state.search_term = ""
     if 'selected_employee_id' not in st.session_state: st.session_state.selected_employee_id = None
     if 'feedback' not in st.session_state: st.session_state.feedback = None
     if 'sound_to_play' not in st.session_state: st.session_state.sound_to_play = None
-    if 'device_fingerprint' not in st.session_state: st.session_state.device_fingerprint = None
 
-    # --- Lock-in the fingerprint once received ---
-    temp_fingerprint = st.session_state.get('device_fingerprint_hidden')
-    if temp_fingerprint and temp_fingerprint != "__fingerprint_placeholder__":
-        if st.session_state.device_fingerprint is None:
-            st.session_state.device_fingerprint = temp_fingerprint
-            st.rerun() # Rerun once to lock the value and remove the JS component's potential interference
-
-    # Connect to Google Sheets and get settings
-    client = get_gsheet_client()
+    client = get_gsheet()
     settings = get_settings(client, GOOGLE_SHEET_NAME)
     st.info(f"**目前模式:** `{settings['mode']}`")
 
-    # --- Admin Panel ---
     with st.sidebar.expander("管理員面板", expanded=False):
+        # ... (管理員面板邏輯維持不變)
         if not st.session_state.authenticated:
             password = st.text_input("請輸入密碼:", type="password")
             if st.button("登入"):
@@ -196,6 +187,7 @@ def main():
             if st.button("登出"):
                 st.session_state.authenticated = False
                 st.rerun()
+
 
     tz = pytz.timezone(TIMEZONE)
     now = datetime.now(tz).time()
@@ -250,17 +242,10 @@ def main():
                 handle_check_out(employee_row, row_index, client)
 
 def handle_check_in(df, employee_row, row_index, client):
+    """Handles the check-in process (採用您版本中的邏輯)."""
     name = employee_row['Name'].iloc[0]
     employee_id = employee_row['EmployeeID'].iloc[0]
     st.subheader(f"確認報到資訊: {name} ({employee_id})")
-
-    fingerprint = st.session_state.get('device_fingerprint')
-    if not fingerprint:
-        st.warning("🔄 正在識別您的裝置，請稍候...")
-        st.caption("如果長時間停留在此畫面，請嘗試重新整理頁面。")
-        return
-
-    st.text_input("裝置識別碼 (Device ID)", value=fingerprint, disabled=True)
 
     check_in_time = employee_row['CheckInTime'].iloc[0]
     if pd.notna(check_in_time) and str(check_in_time).strip() != '':
@@ -271,9 +256,20 @@ def handle_check_in(df, employee_row, row_index, client):
         st.rerun()
         return
 
+    # 唯一的真相來源：從隱藏元件讀取識別碼
+    fingerprint = st.session_state.get('device_fingerprint_hidden')
+
+    if not fingerprint or fingerprint == "__fingerprint_placeholder__":
+        st.warning("🔄 正在識別您的裝置，請稍候...")
+        st.caption("如果長時間停留在此畫面，請嘗試重新整理頁面。")
+        return
+    
+    st.text_input("裝置識別碼 (Device ID)", value=fingerprint, disabled=True)
+
     if st.button("✅ 確認報到"):
-        final_fingerprint = st.session_state.get('device_fingerprint')
-        if not final_fingerprint:
+        # 再次從真相來源確認識別碼
+        final_fingerprint = st.session_state.get('device_fingerprint_hidden')
+        if not final_fingerprint or final_fingerprint == "__fingerprint_placeholder__":
             st.session_state.feedback = {"type": "error", "text": "無法確認報到，識別碼遺失，請刷新頁面再試一次。"}
             st.session_state.sound_to_play = ERROR_SOUND_URL
         elif 'DeviceFingerprint' in df.columns and not df[df['DeviceFingerprint'] == final_fingerprint].empty:
@@ -284,7 +280,7 @@ def handle_check_in(df, employee_row, row_index, client):
             tz = pytz.timezone(TIMEZONE)
             timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
             update_cell(client, GOOGLE_SHEET_NAME, WORKSHEET_NAME, row_index, 4, timestamp)
-            update_cell(client, GOOGLE_SHEET_NAME, WORKSHEET_NAME, row_index, 6, final_fingerprint)
+            update_cell(client, GOOGLE_SHEET_NAME, WORKSHEET_NAME, row_index, 6, final_fingerprint) # 新增寫入識別碼
             st.session_state.feedback = {"type": "success", "text": f"報到成功！歡迎 {name}，您的桌號是 {table_no}"}
             st.session_state.sound_to_play = SUCCESS_SOUND_URL
 
@@ -293,7 +289,7 @@ def handle_check_in(df, employee_row, row_index, client):
         st.rerun()
 
 def handle_check_out(employee_row, row_index, client):
-    # This function remains largely the same
+    """Handles the check-out process."""
     name = employee_row['Name'].iloc[0]
     st.subheader(f"確認簽退: {name}")
 
