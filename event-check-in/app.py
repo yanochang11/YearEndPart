@@ -104,7 +104,7 @@ def get_fingerprint_component():
             while (!window.Streamlit) {
               await new Promise(resolve => setTimeout(resolve, 50));
             }
-            
+
             const fp = await FingerprintJS.load();
             const result = await fp.get();
             Streamlit.setComponentValue(result.visitorId);
@@ -120,32 +120,34 @@ def get_fingerprint_component():
       })();
     </script>
     """
-    return components.html(js_code, height=0)
+    # Add a key to the component for robust state management
+    return components.html(js_code, height=0, key="fingerprint_comp")
 
 def main():
     """Main function to run the Streamlit application."""
     st.set_page_config(page_title="Event Check-in/out System", initial_sidebar_state="collapsed")
 
-    if 'device_fingerprint' not in st.session_state:
-        st.session_state.device_fingerprint = None
+    # --- Simplified Initialization Logic ---
+    # The component's return value is automatically stored in st.session_state.fingerprint_comp
+    get_fingerprint_component()
 
-    if st.session_state.device_fingerprint is None:
-        fingerprint = get_fingerprint_component()
-        
-        if isinstance(fingerprint, str):
-            st.session_state.device_fingerprint = fingerprint
-            st.rerun()
-        else:
-            st.info("🔄 正在初始化報到系統，請稍候...")
-            st.info("🔄 Initializing the check-in system, please wait...")
-            return
+    # Check if the fingerprint has arrived from the frontend
+    if "fingerprint_comp" not in st.session_state or st.session_state.fingerprint_comp is None:
+        st.info("🔄 正在初始化報到系統，請稍候...")
+        st.info("🔄 Initializing the check-in system, please wait...")
+        st.warning("如果此頁面長時間沒有反應，請嘗試重新整理。")
+        return
 
-    if st.session_state.device_fingerprint == "error":
+    # Once we have the fingerprint, assign it to a clear variable
+    device_fingerprint = st.session_state.fingerprint_comp
+
+    if device_fingerprint == "error":
         st.error("無法取得裝置識別碼，請重新整理頁面或聯繫工作人員。")
         return
 
     st.title("Event Check-in/out System")
 
+    # --- Initialize other session state variables ---
     if 'authenticated' not in st.session_state: st.session_state.authenticated = False
     if 'search_term' not in st.session_state: st.session_state.search_term = ""
     if 'selected_employee_id' not in st.session_state: st.session_state.selected_employee_id = None
@@ -228,11 +230,11 @@ def main():
         if not employee_row.empty:
             row_index = employee_row.index[0] + 2
             if settings['mode'] == "Check-in":
-                handle_check_in(df, employee_row, row_index, client)
+                handle_check_in(df, employee_row, row_index, client, device_fingerprint)
             else:
                 handle_check_out(employee_row, row_index, client)
 
-def handle_check_in(df, employee_row, row_index, client):
+def handle_check_in(df, employee_row, row_index, client, fingerprint):
     """Handles the check-in process for a selected employee."""
     check_in_time = employee_row['CheckInTime'].iloc[0]
     if pd.notna(check_in_time) and str(check_in_time).strip() != '':
@@ -246,7 +248,6 @@ def handle_check_in(df, employee_row, row_index, client):
     employee_id = employee_row['EmployeeID'].iloc[0]
     st.info(f"正在為 **{name}** ({employee_id}) 辦理報到手續。 / Processing check-in for **{name}** ({employee_id}).")
 
-    fingerprint = st.session_state.get('device_fingerprint')
     st.text_input("設備識別碼 / Device Fingerprint", value=fingerprint, disabled=True, help="此為瀏覽器識別碼，用於防止重複報到 / This is a browser identifier to prevent duplicate check-ins.")
 
     if st.button("✅ 確認報到 / Confirm Check-in"):
