@@ -1,4 +1,4 @@
-# app_v1.5.0.py
+# app_v1.6.0.py
 import streamlit as st
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -9,7 +9,7 @@ import pytz
 import streamlit.components.v1 as components
 
 # --- App Version ---
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 
 # --- Configuration ---
 TIMEZONE = "Asia/Taipei"
@@ -28,16 +28,13 @@ st.set_page_config(
 # --- Custom CSS (UI/UX Improvement) ---
 st.markdown("""
 <style>
-    /* 主容器樣式，減少頂部邊距讓內容更靠上 */
     .main .block-container {
         padding-top: 1rem;
         padding-bottom: 2rem;
     }
-    /* 設定柔和的背景色 */
     body {
         background-color: #f0f2f6;
     }
-    /* 美化主標題 */
     h1 {
         color: #1a1a1a;
         font-weight: 600;
@@ -48,49 +45,35 @@ st.markdown("""
 
 # --- Fingerprint Component ---
 def get_fingerprint_component():
-    """
-    渲染一個獨立的 HTML 元件，使用 FingerprintJS 獲取裝置ID，
-    並透過 Streamlit.setComponentValue 將結果傳回 Python。
-    """
     js_code = """
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
     <script>
       (async () => {
-        // 等待 Streamlit 物件準備就緒
         while (!window.Streamlit) {
           await new Promise(resolve => setTimeout(resolve, 50));
         }
-
         try {
             const fp = await FingerprintJS.load();
             const result = await fp.get();
-            const visitorId = result.visitorId;
-            // 使用官方建議的 setComponentValue 將值傳回 Python 後端
-            window.Streamlit.setComponentValue(visitorId);
+            window.Streamlit.setComponentValue(result.visitorId);
         } catch (error) {
             console.error("FingerprintJS error:", error);
-            // 傳回錯誤訊息
             window.Streamlit.setComponentValue({ "error": error.message });
         }
       })();
     </script>
     """
-    fingerprint = components.html(js_code, height=0)
-    return fingerprint
+    return components.html(js_code, height=0)
 
-
-# --- Google Sheets Connection ---
+# --- Google Sheets Connection & Data Functions ---
 @st.cache_resource(ttl=600)
 def get_gsheet():
-    """Establishes a connection to the Google Sheet using cached credentials."""
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds = ServiceAccountCredentials.from_json_keyfile_dict(st.secrets.gcp_service_account, scope)
-    client = gspread.authorize(creds)
-    return client
+    return gspread.authorize(creds)
 
 @st.cache_data(ttl=30)
 def get_data(_client, sheet_name, worksheet_name):
-    """Fetches and caches data from the worksheet."""
     try:
         sheet = _client.open(sheet_name).worksheet(worksheet_name)
         data = get_as_dataframe(sheet, evaluate_formulas=True)
@@ -103,7 +86,6 @@ def get_data(_client, sheet_name, worksheet_name):
         return pd.DataFrame()
 
 def update_cell(client, sheet_name, worksheet_name, row, col, value):
-    """Updates a single cell and clears caches."""
     try:
         sheet = client.open(sheet_name).worksheet(worksheet_name)
         sheet.update_cell(row, col, value)
@@ -111,24 +93,19 @@ def update_cell(client, sheet_name, worksheet_name, row, col, value):
     except Exception as e:
         st.error(f"更新 Google Sheet 失敗: {e}")
 
-# --- Settings Management ---
 @st.cache_data(ttl=60)
 def get_settings(_client, sheet_name):
-    """Fetches settings from the 'Settings' worksheet."""
     try:
         settings_sheet = _client.open(sheet_name).worksheet("Settings")
         mode = settings_sheet.acell('A2').value
-        start_time_str = settings_sheet.acell('B2').value
-        end_time_str = settings_sheet.acell('C2').value
-        start_time = datetime.strptime(start_time_str, '%H:%M').time()
-        end_time = datetime.strptime(end_time_str, '%H:%M').time()
+        start_time = datetime.strptime(settings_sheet.acell('B2').value, '%H:%M').time()
+        end_time = datetime.strptime(settings_sheet.acell('C2').value, '%H:%M').time()
         return {"mode": mode, "start_time": start_time, "end_time": end_time}
     except Exception as e:
         st.error(f"無法載入設定，將使用預設值。錯誤: {e}")
         return {"mode": "Check-in", "start_time": time(9, 0), "end_time": time(17, 0)}
 
 def save_settings(client, sheet_name, mode, start_time, end_time):
-    """Saves settings to the 'Settings' worksheet."""
     try:
         settings_sheet = client.open(sheet_name).worksheet("Settings")
         settings_sheet.update('A2:C2', [[mode, start_time.strftime('%H:%M'), end_time.strftime('%H:%M')]])
@@ -139,26 +116,35 @@ def save_settings(client, sheet_name, mode, start_time, end_time):
 
 
 def main():
-    """Main function to run the Streamlit application."""
     st.title("活動報到系統")
     st.markdown(f"<p style='text-align: right; color: grey;'>v{VERSION}</p>", unsafe_allow_html=True)
 
     # --- App State Initialization ---
-    if 'authenticated' not in st.session_state: st.session_state.authenticated = False
-    if 'search_term' not in st.session_state: st.session_state.search_term = ""
-    if 'selected_employee_id' not in st.session_state: st.session_state.selected_employee_id = None
-    if 'feedback' not in st.session_state: st.session_state.feedback = None
-    if 'sound_to_play' not in st.session_state: st.session_state.sound_to_play = None
-    if 'device_fingerprint' not in st.session_state: st.session_state.device_fingerprint = None
+    for key in ['authenticated', 'search_term', 'selected_employee_id', 'feedback', 'sound_to_play', 'device_fingerprint']:
+        if key not in st.session_state:
+            st.session_state[key] = None if key != 'search_term' else ""
 
-    # --- (核心修改 v1.5.0) 獲取裝置識別碼，無刷新感 ---
-    # 只有在 session_state 中尚未存在 fingerprint 時，才呼叫元件。
+    # --- (核心修改 v1.6.0) 獲取並立即顯示裝置識別碼 ---
     if not st.session_state.device_fingerprint:
         fingerprint_value = get_fingerprint_component()
-        # 當元件成功回傳值時，將其存入 session_state。
-        # 不使用 st.rerun()，而是讓 Streamlit 自然更新，避免刷新感。
         if fingerprint_value:
             st.session_state.device_fingerprint = fingerprint_value
+            st.rerun() # 獲取到值後，重跑一次以更新下方的顯示元件
+
+    # 這個 placeholder 會始終存在於主畫面上
+    fingerprint_placeholder = st.empty()
+    fingerprint = st.session_state.get('device_fingerprint')
+
+    if not fingerprint:
+        fingerprint_placeholder.warning("🔄 正在識別您的裝置，請稍候...")
+    else:
+        # 一旦獲取成功，就用一個 disabled 的 text_input 把值固定住
+        fingerprint_placeholder.text_input(
+            "裝置識別碼 (Device ID)",
+            value=fingerprint,
+            disabled=True,
+            key="static_fingerprint_display"
+        )
 
     # --- 主應用程式流程 ---
     client = get_gsheet()
@@ -197,19 +183,19 @@ def main():
     if df.empty:
         return
 
+    # --- Feedback and Sound ---
     if st.session_state.feedback:
-        message_type = st.session_state.feedback.get("type")
-        message_text = st.session_state.feedback.get("text")
-        if message_type == "success": st.success(message_text)
-        elif message_type == "warning": st.warning(message_text)
-        elif message_type == "error": st.error(message_text)
+        msg_type, msg_text = st.session_state.feedback.values()
+        if msg_type == "success": st.success(msg_text)
+        elif msg_type == "warning": st.warning(msg_text)
+        elif msg_type == "error": st.error(msg_text)
         st.session_state.feedback = None
 
     if st.session_state.sound_to_play:
         st.audio(st.session_state.sound_to_play, autoplay=True)
         st.session_state.sound_to_play = None
 
-    # --- Search and Confirmation Flow ---
+    # --- Main Logic Flow ---
     if not st.session_state.get('selected_employee_id'):
         st.session_state.search_term = st.text_input("請輸入您的員工編號或姓名:", value=st.session_state.search_term, key="search_input").strip()
         if st.button("確認"):
@@ -219,7 +205,6 @@ def main():
                 search_term_lower = st.session_state.search_term.lower()
                 id_match = df[df['EmployeeID'].str.lower() == search_term_lower]
                 name_match = df[df['Name'].str.lower() == search_term_lower]
-
                 if not id_match.empty:
                     st.session_state.selected_employee_id = id_match['EmployeeID'].iloc[0]
                 elif not name_match.empty:
@@ -243,7 +228,6 @@ def main():
 
 
 def handle_check_in(df, employee_row, row_index, client):
-    """Handles the check-in process."""
     name = employee_row['Name'].iloc[0]
     employee_id = employee_row['EmployeeID'].iloc[0]
     st.subheader(f"確認報到資訊: {name} ({employee_id})")
@@ -257,16 +241,11 @@ def handle_check_in(df, employee_row, row_index, client):
         st.rerun()
         return
 
-    fingerprint = st.session_state.get('device_fingerprint')
-
-    if not fingerprint:
-        st.warning("🔄 正在識別您的裝置，請稍候...")
-        st.caption("如果長時間停留在此畫面，請嘗試重新整理頁面。")
-        return
-    
-    st.text_input("裝置識別碼 (Device ID)", value=fingerprint, disabled=True)
+    # 這裡不再需要顯示識別碼的邏輯，因為它已經顯示在主畫面上了
+    # 只需要在按下按鈕時，從 session_state 讀取即可
 
     if st.button("✅ 確認報到"):
+        # 從 session_state 直接讀取已固定的識別碼
         final_fingerprint = st.session_state.get('device_fingerprint')
         if not final_fingerprint:
             st.session_state.feedback = {"type": "error", "text": "無法確認報到，識別碼遺失，請刷新頁面再試一次。"}
@@ -288,7 +267,6 @@ def handle_check_in(df, employee_row, row_index, client):
         st.rerun()
 
 def handle_check_out(employee_row, row_index, client):
-    """Handles the check-out process."""
     name = employee_row['Name'].iloc[0]
     st.subheader(f"確認簽退: {name}")
 
@@ -299,7 +277,7 @@ def handle_check_out(employee_row, row_index, client):
     else:
         if st.button("✅ 確認簽退"):
             tz = pytz.timezone(TIMEZONE)
-            timestamp = datetime.now(tz).strftime("%Y-m-d %H:%M:%S")
+            timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
             update_cell(client, GOOGLE_SHEET_NAME, WORKSHEET_NAME, row_index, 5, timestamp)
             st.session_state.feedback = {"type": "success", "text": f"簽退成功，{name}，祝您有個美好的一天！"}
             st.session_state.sound_to_play = SUCCESS_SOUND_URL
