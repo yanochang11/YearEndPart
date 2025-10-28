@@ -6,7 +6,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 from datetime import datetime, time, timedelta
 import pytz
 import streamlit.components.v1 as components
-# 【關鍵修正 1】: 引入 Cookie Manager
+# 【修正 1】: 引入 Cookie Manager
 import streamlit_cookies_manager
 
 # --- Timezone Configuration ---
@@ -94,17 +94,14 @@ def main():
     """Main function to run the Streamlit application."""
     st.set_page_config(page_title="Event Check-in/out System", initial_sidebar_state="collapsed")
     
-    # 【關鍵修正 2】: 初始化 Cookie Manager
-    # `key` 參數是為了讓 manager 在 session state 中有一個獨立的命名空間
-    cookies = streamlit_cookies_manager.CookieManager(key="app_cookie_manager")
+    # 【關鍵修正】: 初始化 Cookie Manager 時，移除 'key' 參數
+    cookies = streamlit_cookies_manager.CookieManager()
 
     st.title("Event Check-in/out System")
 
     # --- Device Fingerprint Handling ---
-    # 【關鍵修正 3】: 優先從 Cookie 中讀取 Fingerprint
     fingerprint_from_cookie = cookies.get('device_fingerprint')
 
-    # 只有在 Cookie 中不存在 fingerprint 時，才執行 JS 來獲取
     if not fingerprint_from_cookie:
         js_code = '''
         <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
@@ -142,7 +139,6 @@ def main():
         '''
         components.html(js_code, height=0)
 
-    # 這個隱藏元件現在只作為 JS 首次獲取 fingerprint 時的臨時橋樑
     st.text_input("Device Fingerprint JS Bridge", key="device_fingerprint_hidden", label_visibility="hidden",
                   placeholder="__fingerprint_placeholder__")
 
@@ -152,17 +148,14 @@ def main():
     if 'selected_employee_id' not in st.session_state: st.session_state.selected_employee_id = None
     if 'feedback_message' not in st.session_state: st.session_state.feedback_message = None
     if 'device_fingerprint' not in st.session_state:
-        # 【關鍵修正 4】: 初始化 session_state 時，優先使用 Cookie 的值
         st.session_state.device_fingerprint = fingerprint_from_cookie
 
-    # 【關鍵修正 5】: 如果 Cookie 中沒有，則嘗試從 JS 橋樑獲取，並存入 Cookie
     temp_fingerprint_from_js = st.session_state.get('device_fingerprint_hidden')
     if not st.session_state.device_fingerprint and temp_fingerprint_from_js and temp_fingerprint_from_js != "__fingerprint_placeholder__":
         st.session_state.device_fingerprint = temp_fingerprint_from_js
-        # 將首次獲取的值存入 Cookie，讓它在下次刷新後依然存在
         cookies['device_fingerprint'] = temp_fingerprint_from_js
-        cookies.save() # 寫入瀏覽器
-        st.rerun() # 立即重新整理一次，確保後續邏輯都從已存在的 state 開始
+        cookies.save()
+        st.rerun()
 
     GOOGLE_SHEET_NAME = "Event_Check-in"
     WORKSHEET_NAME = "Sheet1"
@@ -260,28 +253,22 @@ def handle_check_in(df, employee_row, row_index, client):
     employee_id = employee_row['EmployeeID'].iloc[0]
     st.info(f"正在為 **{name}** ({employee_id}) 辦理報到手續。 / Processing check-in for **{name}** ({employee_id}).")
 
-    # 從 session_state 讀取指紋
     fingerprint = st.session_state.get('device_fingerprint')
 
-    # 檢查指紋是否已成功獲取
     if not fingerprint:
         st.warning("正在識別您的裝置，請稍候... / Identifying your device, please wait...")
         st.text_input("設備識別碼 / Device Fingerprint", "正在獲取中... / Acquiring...", disabled=True)
-        # 不需要手動 rerun，Streamlit 的機制會自動在 JS 橋樑更新值後重跑
         return
 
-    # 顯示指紋，並設定為 disabled，讓使用者無法修改
     st.text_input("設備識別碼 / Device Fingerprint", value=fingerprint, disabled=True)
 
     if st.button("✅ 確認報到 / Confirm Check-in"):
-        # 直接使用我們已安全儲存的指紋
         final_fingerprint = st.session_state.get('device_fingerprint')
         
         if not final_fingerprint:
              st.error("無法確認報到，識別碼遺失，請刷新頁面再試一次。 / Cannot confirm, fingerprint is missing. Please refresh and try again.")
              return
 
-        # 檢查 Google Sheet 中是否已存在此指紋
         if 'DeviceFingerprint' in df.columns and not df[df['DeviceFingerprint'] == final_fingerprint].empty:
             st.session_state.feedback_message = {"type": "error", "text": "此裝置已完成報到 / This device has already been used for check-in."}
         else:
@@ -289,11 +276,9 @@ def handle_check_in(df, employee_row, row_index, client):
             tz = pytz.timezone(TIMEZONE)
             timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
             update_cell(client, "Event_Check-in", "Sheet1", row_index, 4, timestamp)
-            # 假設 DeviceFingerprint 在 G 欄 (第 7 欄)，請根據您的 Sheet 調整
             update_cell(client, "Event_Check-in", "Sheet1", row_index, 6, final_fingerprint)
             st.session_state.feedback_message = {"type": "success", "text": f"報到成功！歡迎 {name}，您的桌號在 {table_no} / Check-in successful! Welcome {name}, your table is {table_no}"}
 
-        # 【關鍵修正 6】: 只重設使用者相關的狀態，保留 fingerprint
         st.session_state.selected_employee_id = None
         st.session_state.search_term = ""
         st.rerun()
