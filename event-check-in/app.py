@@ -1,4 +1,4 @@
-# app_v2.5.0.py
+# app_v2.6.0.py
 import streamlit as st
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -9,7 +9,7 @@ import pytz
 import streamlit.components.v1 as components
 
 # --- App Version ---
-VERSION = "2.5.0 (Final & Stable)"
+VERSION = "2.6.0 (Final CSS Fix)"
 
 # --- Configuration ---
 TIMEZONE = "Asia/Taipei"
@@ -35,6 +35,10 @@ st.markdown("""
     div[data-testid="stTextInput"][disabled] input, div[data-testid="stButton"][disabled] button {
         background-color: #e9ecef;
         cursor: not-allowed;
+    }
+    /* 關鍵修正：重新加入此 CSS 規則以隱藏底層的資料捕獲欄位 */
+    div[data-testid="stTextInput"] input[placeholder="__fingerprint_placeholder__"] {
+        display: none !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -125,11 +129,10 @@ def main():
     '''
     components.html(js_code, height=0)
 
-    # 隱藏的溝通橋樑，作為唯一的事實來源
+    # 這個隱藏的溝通橋樑，現在會被上面的 CSS 規則正確隱藏
     st.text_input("Device Fingerprint Hidden", key="device_fingerprint_hidden", label_visibility="hidden",
                   placeholder="__fingerprint_placeholder__")
 
-    # 初始化 session state
     for key in ['authenticated', 'search_term', 'feedback']:
         if key not in st.session_state:
             st.session_state[key] = None if key != 'search_term' else ""
@@ -138,14 +141,13 @@ def main():
     fingerprint = st.session_state.get('device_fingerprint_hidden')
     is_ready = bool(fingerprint) and fingerprint != "__fingerprint_placeholder__"
 
-    # 決定顯示的值：如果系統就緒，顯示識別碼；否則顯示提示文字
     display_value = fingerprint if is_ready else "正在獲取中..."
     
     # **畫面上永遠只有這一個「裝置識別碼」欄位**
     st.text_input(
         "裝置識別碼 (Device ID)",
         value=display_value,
-        disabled=True,  # 此欄位永遠不可編輯
+        disabled=True,
         key="fingerprint_display_field"
     )
 
@@ -183,10 +185,10 @@ def main():
         "請輸入您的員工編號或姓名:",
         value=st.session_state.search_term,
         key="search_input",
-        disabled=not is_ready # **關鍵**：系統未就緒時，禁用此欄位
+        disabled=not is_ready
     ).strip()
 
-    if st.button("確認", disabled=not is_ready): # **關鍵**：系統未就緒時，禁用此按鈕
+    if st.button("確認", disabled=not is_ready):
         tz = pytz.timezone(TIMEZONE)
         now = datetime.now(tz).time()
 
