@@ -2,8 +2,8 @@ import streamlit as st
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
-from gspread_dataframe import get_as_dataframe
-from datetime import datetime, time
+from gspread_dataframe import get_as_dataframe, set_with_dataframe
+from datetime import datetime, time, timedelta
 import pytz
 import streamlit.components.v1 as components
 
@@ -39,8 +39,6 @@ def get_data(_client, sheet_name, worksheet_name):
         data = get_as_dataframe(sheet)
         if 'EmployeeID' in data.columns:
             data['EmployeeID'] = data['EmployeeID'].astype(str)
-        if 'DeviceFingerprint' in data.columns:
-            data['DeviceFingerprint'] = data['DeviceFingerprint'].astype(str)
         return data
     except gspread.exceptions.SpreadsheetNotFound:
         st.error(f"Spreadsheet '{sheet_name}' not found. Please check configuration.")
@@ -51,10 +49,13 @@ def get_data(_client, sheet_name, worksheet_name):
 
 def update_cell(client, sheet_name, worksheet_name, row, col, value):
     """Updates a single cell in the Google Sheet and clears relevant caches."""
+    if st.session_state.get('mock_mode', False):
+        st.info("Mock mode: Simulating a successful update.")
+        return
     try:
         sheet = client.open(sheet_name).worksheet(worksheet_name)
         sheet.update_cell(row, col, value)
-        get_data.clear()
+        get_data.clear() # Clear data cache to reflect the update
     except Exception as e:
         st.error(f"Failed to update Google Sheet: {e}")
 
@@ -76,86 +77,80 @@ def get_settings(_client, sheet_name):
 
 def save_settings(client, sheet_name, mode, start_time, end_time):
     """Saves settings to the 'Settings' worksheet."""
+    if st.session_state.get('mock_mode', False):
+        st.info("Mock mode: Simulating a successful settings save.")
+        return
     try:
         settings_sheet = client.open(sheet_name).worksheet("Settings")
         settings_sheet.update('A2:C2', [[mode, start_time.strftime('%H:%M'), end_time.strftime('%H:%M')]])
-        get_settings.clear()
+        get_settings.clear() # Clear settings cache after saving
         st.success("設定已儲存 / Settings saved successfully!")
     except Exception as e:
         st.error(f"儲存設定失敗 / Failed to save settings: {e}")
 
-def get_fingerprint_component():
-    """
-    Renders a robust JavaScript component that polls until the Streamlit object is ready.
-    """
-    js_code = """
-    <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
-    <script>
-      (function() {
-        if (window.fingerprintSent) {
-          return;
-        }
-        window.fingerprintSent = true;
-
-        const getAndSendFingerprint = async () => {
-          try {
-            while (!window.Streamlit) {
-              await new Promise(resolve => setTimeout(resolve, 50));
-            }
-
-            const fp = await FingerprintJS.load();
-            const result = await fp.get();
-            
-            // Add a small delay to ensure the frontend is ready before sending
-            setTimeout(() => {
-                Streamlit.setComponentValue(result.visitorId);
-            }, 200);
-
-          } catch (error) {
-            console.error("FingerprintJS error:", error);
-            if (window.Streamlit) {
-              Streamlit.setComponentValue("error");
-            }
-          }
-        };
-
-        getAndSendFingerprint();
-      })();
-    </script>
-    """
-    return components.html(js_code, height=0)
-
 def main():
     """Main function to run the Streamlit application."""
     st.set_page_config(page_title="Event Check-in/out System", initial_sidebar_state="collapsed")
-
-    # --- Robust Initialization Logic with State Flag ---
-    if 'fingerprint_initialized' not in st.session_state:
-        st.session_state.fingerprint_initialized = False
-        st.session_state.device_fingerprint = None
-    
-    # If not initialized, try to get the fingerprint
-    if not st.session_state.fingerprint_initialized:
-        fingerprint_value = get_fingerprint_component()
-        
-        # If the component returns a value, it means JS has sent it
-        if fingerprint_value:
-            st.session_state.device_fingerprint = fingerprint_value
-            st.session_state.fingerprint_initialized = True
-            st.rerun() # Immediately rerun to show the main app
-        # If no value yet, just show the loading message and wait for the next rerun
-        else:
-            st.info("🔄 正在初始化報到系統，請稍候...")
-            st.info("🔄 Initializing the check-in system, please wait...")
-            return
-
-    if st.session_state.device_fingerprint == "error":
-        st.error("無法取得裝置識別碼，請重新整理頁面或聯繫工作人員。")
-        return
-
-    # --- Main Application Logic ---
     st.title("Event Check-in/out System")
 
+    # --- Device Fingerprint Handling ---
+    if 'device_fingerprint' not in st.session_state:
+        st.session_state.device_fingerprint = ""
+
+    # Hidden input field that will be populated by our JavaScript
+    st.text_input("Device Fingerprint", key="device_fingerprint_hidden", label_visibility="hidden",
+                  placeholder="__fingerprint_placeholder__")
+
+    st.markdown("""<style>input[placeholder="__fingerprint_placeholder__"] { display: none; }</style>""", unsafe_allow_html=True)
+
+    # JavaScript to get the fingerprint and update the hidden Streamlit input. This is the most robust version.
+    js_code = '''
+    <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
+    <script>
+      function setFingerprint() {
+        const fpPromise = FingerprintJS.load();
+        fpPromise
+          .then(fp => fp.get())
+          .then(result => {
+            const visitorId = result.visitorId;
+            console.log("Device Fingerprint:", visitorId);
+
+            let attempts = 0;
+            const maxAttempts = 50; // Try for 5 seconds
+            const intervalId = setInterval(() => {
+                attempts++;
+                const input = window.parent.document.querySelector('input[placeholder="__fingerprint_placeholder__"]');
+
+                if (input) {
+                    if(input.value === "") {
+                        input.value = visitorId;
+                        // Dispatch event to notify Streamlit of the change
+                        const event = new Event('input', { bubbles: true });
+                        input.dispatchEvent(event);
+                        console.log('Fingerprint set successfully.');
+                    }
+                    clearInterval(intervalId); // Stop polling once successful
+                } else if (attempts >= maxAttempts) {
+                    clearInterval(intervalId); // Stop polling after timeout
+                    console.error('Failed to find the fingerprint input field.');
+                }
+            }, 100); // Check every 100ms
+          })
+          .catch(error => console.error(error));
+      }
+      setFingerprint();
+    </script>
+    '''
+    components.html(js_code, height=0)
+
+    # 【關鍵修正】: 這是解決畫面卡住的核心。
+    # 這段邏輯會在每次頁面互動時檢查：如果 JS 已經填入了隱藏欄位，但我們的主變數還是空的，
+    # 就把值同步過來，並立刻觸發一次頁面刷新。
+    if st.session_state.device_fingerprint_hidden and not st.session_state.device_fingerprint:
+        st.session_state.device_fingerprint = st.session_state.device_fingerprint_hidden
+        st.rerun()
+
+    # --- Main App Logic ---
     if 'authenticated' not in st.session_state: st.session_state.authenticated = False
     if 'search_term' not in st.session_state: st.session_state.search_term = ""
     if 'selected_employee_id' not in st.session_state: st.session_state.selected_employee_id = None
@@ -209,6 +204,7 @@ def main():
         elif message_type == "error": st.error(message_text)
         st.session_state.feedback_message = None
 
+    # --- Search and Confirmation Flow ---
     if not st.session_state.get('selected_employee_id'):
         st.session_state.search_term = st.text_input("請輸入您的員工編號或姓名 / Please enter your Employee ID or Name:", value=st.session_state.search_term).strip()
         if st.button("確認 / Confirm"):
@@ -232,7 +228,7 @@ def main():
                 else:
                     st.session_state.feedback_message = {"type": "error", "text": "查無此人，請確認輸入是否正確，或洽詢工作人員 / User not found, please check your input or contact staff."}
             st.rerun()
-    else:
+    else: # An employee has been selected
         employee_id = st.session_state.selected_employee_id
         employee_row = df[df['EmployeeID'] == employee_id]
         if not employee_row.empty:
@@ -257,23 +253,26 @@ def handle_check_in(df, employee_row, row_index, client):
     st.info(f"正在為 **{name}** ({employee_id}) 辦理報到手續。 / Processing check-in for **{name}** ({employee_id}).")
 
     fingerprint = st.session_state.get('device_fingerprint')
-    st.text_input("設備識別碼 / Device Fingerprint", value=fingerprint, disabled=True, help="此為瀏覽器識別碼，用於防止重複報到 / This is a browser identifier to prevent duplicate check-ins.")
+
+    if not fingerprint:
+        st.text_input("設備識別碼 / Device Fingerprint", "正在獲取中... / Acquiring...", disabled=True)
+        st.warning("正在識別您的裝置，請稍候... / Identifying your device, please wait...")
+        # 此處不再需要 st.stop() 或手動按鈕。上面的 st.rerun() 機制會自動處理刷新。
+        return
+
+    # 如果程式能執行到這裡，代表 fingerprint 已經成功獲取
+    st.text_input("設備識別碼 / Device Fingerprint", value=fingerprint, disabled=True)
 
     if st.button("✅ 確認報到 / Confirm Check-in"):
-        if isinstance(fingerprint, str):
-            fresh_df = get_data(client, "Event_Check-in", "Sheet1")
-            if 'DeviceFingerprint' in fresh_df.columns and not fresh_df[fresh_df['DeviceFingerprint'] == fingerprint].empty:
-                st.session_state.feedback_message = {"type": "error", "text": "此裝置已完成報到 / This device has already been used for check-in."}
-            else:
-                table_no = employee_row['TableNo'].iloc[0]
-                tz = pytz.timezone(TIMEZONE)
-                timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
-
-                update_cell(client, "Event_Check-in", "Sheet1", row_index, 4, timestamp)
-                update_cell(client, "Event_Check-in", "Sheet1", row_index, 6, fingerprint)
-                st.session_state.feedback_message = {"type": "success", "text": f"報到成功！歡迎 {name}，您的桌號在 {table_no} / Check-in successful! Welcome {name}, your table is {table_no}"}
+        if 'DeviceFingerprint' in df.columns and not df[df['DeviceFingerprint'] == fingerprint].empty:
+            st.session_state.feedback_message = {"type": "error", "text": "此裝置已完成報到 / This device has already been used for check-in."}
         else:
-            st.session_state.feedback_message = {"type": "error", "text": "無法驗證裝置，請重新整理頁面 / Could not verify device, please refresh the page."}
+            table_no = employee_row['TableNo'].iloc[0]
+            tz = pytz.timezone(TIMEZONE)
+            timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+            update_cell(client, "Event_Check-in", "Sheet1", row_index, 4, timestamp)
+            update_cell(client, "Event_Check-in", "Sheet1", row_index, 6, fingerprint)
+            st.session_state.feedback_message = {"type": "success", "text": f"報到成功！歡迎 {name}，您的桌號在 {table_no} / Check-in successful! Welcome {name}, your table is {table_no}"}
 
         st.session_state.selected_employee_id = None
         st.session_state.search_term = ""
