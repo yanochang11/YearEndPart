@@ -46,7 +46,7 @@ def get_data(_client, sheet_name, worksheet_name):
         st.error(f"Spreadsheet '{sheet_name}' not found. Please check configuration.")
         return pd.DataFrame()
     except gspread.exceptions.WorksheetNotFound:
-        st.error(f"Worksheet '{works_name}' not found. Please check configuration.")
+        st.error(f"Worksheet '{worksheet_name}' not found. Please check configuration.")
         return pd.DataFrame()
 
 def update_cell(client, sheet_name, worksheet_name, row, col, value):
@@ -130,6 +130,14 @@ def main():
 
     # --- Main Application Logic ---
     st.title("Event Check-in/out System")
+
+    # --- Display Fingerprint ---
+    st.text_input(
+        "設備識別碼 / Device Fingerprint",
+        value=st.session_state.fingerprint_id,
+        disabled=True,
+        help="此為瀏覽器識別碼，用於防止重複報到 / This is a browser identifier to prevent duplicate check-ins."
+    )
 
     if 'authenticated' not in st.session_state: st.session_state.authenticated = False
     if 'search_term' not in st.session_state: st.session_state.search_term = ""
@@ -231,11 +239,8 @@ def handle_check_in(df, employee_row, row_index, client):
     employee_id = employee_row['EmployeeID'].iloc[0]
     st.info(f"正在為 **{name}** ({employee_id}) 辦理報到手續。 / Processing check-in for **{name}** ({employee_id}).")
 
-    # Directly use the permanently stored fingerprint_id and display it in a disabled field
-    fingerprint = st.session_state.fingerprint_id
-    st.text_input("設備識別碼 / Device Fingerprint", value=fingerprint, disabled=True, help="此為瀏覽器識別碼，用於防止重複報到 / This is a browser identifier to prevent duplicate check-ins.")
-
     if st.button("✅ 確認報到 / Confirm Check-in"):
+        fingerprint = st.session_state.fingerprint_id
         if 'DeviceFingerprint' in df.columns and not df[df['DeviceFingerprint'] == fingerprint].empty:
             st.session_state.feedback_message = {"type": "error", "text": "此裝置已完成報到 / This device has already been used for check-in."}
         else:
