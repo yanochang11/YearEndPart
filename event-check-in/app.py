@@ -94,16 +94,17 @@ def main():
     st.title("Event Check-in/out System")
 
     # --- Device Fingerprint Handling ---
+    # 步驟 1: 初始化一個絕對穩定的狀態變數來儲存識別碼
     if 'device_fingerprint' not in st.session_state:
         st.session_state.device_fingerprint = ""
 
-    # Hidden input field that will be populated by our JavaScript
+    # 步驟 2: 準備一個隱藏的元件，專門用來從 JavaScript 接收值
     st.text_input("Device Fingerprint", key="device_fingerprint_hidden", label_visibility="hidden",
                   placeholder="__fingerprint_placeholder__")
 
     st.markdown("""<style>input[placeholder="__fingerprint_placeholder__"] { display: none; }</style>""", unsafe_allow_html=True)
 
-    # JavaScript to get the fingerprint and update the hidden Streamlit input. This is the most robust version.
+    # 步驟 3: 執行 JavaScript，將計算出的值填入上面的隱藏元件
     js_code = '''
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
     <script>
@@ -114,27 +115,24 @@ def main():
           .then(result => {
             const visitorId = result.visitorId;
             console.log("Device Fingerprint:", visitorId);
-
             let attempts = 0;
-            const maxAttempts = 50; // Try for 5 seconds
+            const maxAttempts = 50;
             const intervalId = setInterval(() => {
                 attempts++;
                 const input = window.parent.document.querySelector('input[placeholder="__fingerprint_placeholder__"]');
-
                 if (input) {
-                    if(input.value === "") {
+                    if(input.value === "" || input.value === "__fingerprint_placeholder__") {
                         input.value = visitorId;
-                        // Dispatch event to notify Streamlit of the change
                         const event = new Event('input', { bubbles: true });
                         input.dispatchEvent(event);
-                        console.log('Fingerprint set successfully.');
+                        console.log('Fingerprint set successfully into hidden field.');
                     }
-                    clearInterval(intervalId); // Stop polling once successful
+                    clearInterval(intervalId);
                 } else if (attempts >= maxAttempts) {
-                    clearInterval(intervalId); // Stop polling after timeout
+                    clearInterval(intervalId);
                     console.error('Failed to find the fingerprint input field.');
                 }
-            }, 100); // Check every 100ms
+            }, 100);
           })
           .catch(error => console.error(error));
       }
@@ -143,12 +141,14 @@ def main():
     '''
     components.html(js_code, height=0)
 
-    # 【關鍵修正】: 這是解決畫面卡住的核心。
-    # 這段邏輯會在每次頁面互動時檢查：如果 JS 已經填入了隱藏欄位，但我們的主變數還是空的，
-    # 就把值同步過來，並立刻觸發一次頁面刷新。
-    if st.session_state.device_fingerprint_hidden and not st.session_state.device_fingerprint:
+    # 步驟 4: 【解決問題的核心】
+    # 檢查我們穩定的狀態變數是否為空，且前端傳來的值是否已經存在且不是預設值。
+    # 如果是，就進行一次性的狀態「鎖定」，但不再這裡呼叫 st.rerun()。
+    # 使用者的下一個操作（例如點擊按鈕）會自然觸發刷新，到那時這個值就會被鎖定，且不會打斷使用者的操作流程。
+    if (not st.session_state.device_fingerprint and
+            st.session_state.device_fingerprint_hidden and
+            st.session_state.device_fingerprint_hidden != "__fingerprint_placeholder__"):
         st.session_state.device_fingerprint = st.session_state.device_fingerprint_hidden
-        st.rerun()
 
     # --- Main App Logic ---
     if 'authenticated' not in st.session_state: st.session_state.authenticated = False
@@ -245,6 +245,7 @@ def handle_check_in(df, employee_row, row_index, client):
         st.session_state.feedback_message = {"type": "warning", "text": "您已報到，無須重複操作 / You have already checked in."}
         st.session_state.selected_employee_id = None
         st.session_state.search_term = ""
+        st.session_state.device_fingerprint = "" # 為下一位使用者重設
         st.rerun()
         return
 
@@ -252,18 +253,20 @@ def handle_check_in(df, employee_row, row_index, client):
     employee_id = employee_row['EmployeeID'].iloc[0]
     st.info(f"正在為 **{name}** ({employee_id}) 辦理報到手續。 / Processing check-in for **{name}** ({employee_id}).")
 
+    # 步驟 5: 所有的後續邏輯，都只依賴我們絕對穩定的 'device_fingerprint' 狀態
     fingerprint = st.session_state.get('device_fingerprint')
 
-    if not fingerprint:
+    # 如果穩定的狀態變數是空的，就顯示等待畫面
+    if not fingerprint or fingerprint == "__fingerprint_placeholder__":
         st.text_input("設備識別碼 / Device Fingerprint", "正在獲取中... / Acquiring...", disabled=True)
         st.warning("正在識別您的裝置，請稍候... / Identifying your device, please wait...")
-        # 此處不再需要 st.stop() 或手動按鈕。上面的 st.rerun() 機制會自動處理刷新。
         return
 
-    # 如果程式能執行到這裡，代表 fingerprint 已經成功獲取
+    # 如果程式能執行到這裡，代表 fingerprint 已經成功獲取並被鎖定
     st.text_input("設備識別碼 / Device Fingerprint", value=fingerprint, disabled=True)
 
     if st.button("✅ 確認報到 / Confirm Check-in"):
+        # 按下按鈕時，我們使用的是 'fingerprint' 變數，它儲存的是穩定、不會遺失的值
         if 'DeviceFingerprint' in df.columns and not df[df['DeviceFingerprint'] == fingerprint].empty:
             st.session_state.feedback_message = {"type": "error", "text": "此裝置已完成報到 / This device has already been used for check-in."}
         else:
@@ -274,8 +277,11 @@ def handle_check_in(df, employee_row, row_index, client):
             update_cell(client, "Event_Check-in", "Sheet1", row_index, 6, fingerprint)
             st.session_state.feedback_message = {"type": "success", "text": f"報到成功！歡迎 {name}，您的桌號在 {table_no} / Check-in successful! Welcome {name}, your table is {table_no}"}
 
+        # 為下一位使用者重設所有相關狀態，準備開始下一次報到
         st.session_state.selected_employee_id = None
         st.session_state.search_term = ""
+        st.session_state.device_fingerprint = ""
+        st.session_state.device_fingerprint_hidden = ""
         st.rerun()
 
 def handle_check_out(employee_row, row_index, client):
