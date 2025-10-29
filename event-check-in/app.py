@@ -1,7 +1,7 @@
-# app_v2.8.0.py (Modern Auth & Crash Fix)
+# app_v3.1.0.py (Stable Auto-Fingerprint)
 import streamlit as st
 import gspread
-from google.oauth2.service_account import Credentials # Using modern google-auth library
+from google.oauth2.service_account import Credentials # 使用已驗證的 modern google-auth
 import pandas as pd
 from gspread_dataframe import get_as_dataframe
 from datetime import datetime, time
@@ -9,7 +9,7 @@ import pytz
 import streamlit.components.v1 as components
 
 # --- App Version ---
-VERSION = "2.8.0 (Modern Auth)"
+VERSION = "3.1.0 (Stable Auto-Fingerprint)"
 
 # --- Configuration ---
 TIMEZONE = "Asia/Taipei"
@@ -26,20 +26,15 @@ st.set_page_config(
 # --- Custom CSS ---
 st.markdown("""
 <style>
-    .main .block-container {
-        padding-top: 1rem;
-        padding-bottom: 2rem;
-    }
+    .main .block-container { padding-top: 1rem; padding-bottom: 2rem; }
     body { background-color: #f0f2f6; }
     h1 { color: #1a1a1a; font-weight: 600; }
     div[data-testid="stTextInput"] > div > div > input[disabled],
     div[data-testid="stButton"] > button[disabled] {
-        background-color: #e9ecef;
-        cursor: not-allowed;
+        background-color: #e9ecef; cursor: not-allowed;
     }
     input[aria-label="您的裝置識別碼 / Your Device ID"] {
-        background-color: #f0f2f6 !important;
-        color: #555 !important;
+        background-color: #f0f2f6 !important; color: #555 !important;
         border: 1px solid #ced4da !important;
     }
 </style>
@@ -48,20 +43,19 @@ st.markdown("""
 # --- Google Sheets Connection & Data Functions ---
 @st.cache_resource(ttl=600)
 def get_gsheet():
-    """Establishes a connection to Google Sheets using the modern google-auth library."""
+    """使用我們在 test_connection.py 中驗證過的連線方式"""
     try:
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds_dict = st.secrets.get("gcp_service_account")
         if not creds_dict:
             st.error("GCP Service Account secrets not found. Please configure `[gcp_service_account]` in your Streamlit Secrets.")
             return None
-        
         creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
         client = gspread.authorize(creds)
         return client
     except Exception as e:
         st.error(f"Google Sheets 連線失敗 / Google Sheets connection failed: {e}")
-        st.info("請確認您的 Streamlit Secrets (`[gcp_service_account]`) 是否已正確設定，且服務帳號已被授權編輯您的 Google Sheet。")
+        st.info("請確認您的 Streamlit Secrets (`[gcp_service_account]`) 是否已正確設定。")
         return None
 
 @st.cache_data(ttl=30)
@@ -111,31 +105,33 @@ def save_settings(client, sheet_name, mode, start_time, end_time):
     except Exception as e:
         st.error(f"儲存設定失敗 / Failed to save settings: {e}")
 
-def render_fingerprint_button_component():
+def get_fingerprint_component():
+    """
+    這段程式碼直接複製自您成功的 test_fingerprint.py
+    """
     js_code = """
-    <div style="display: flex; justify-content: center; margin: 1rem 0;">
-        <button id="fp_button" style="padding: 10px 24px; font-size: 16px; cursor: pointer;">
-            獲取裝置識別碼 / Get Device ID
-        </button>
-    </div>
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
     <script>
-      const button = document.getElementById('fp_button');
-      if (button) {
-        button.onclick = function() {
-          this.disabled = true; this.textContent = '讀取中... / Loading...';
-          FingerprintJS.load().then(fp => fp.get()).then(result => {
-              window.Streamlit.setComponentValue(result.visitorId);
-            }).catch(err => {
-                console.error('FingerprintJS error:', err);
-                this.textContent = '獲取失敗，請重試 / Error, please retry';
-                window.Streamlit.setComponentValue({ "error": err.message });
-            });
-        };
-      }
+      (async () => {
+        if (window.fingerprintJsExecuted) {
+            return;
+        }
+        window.fingerprintJsExecuted = true;
+        try {
+            while (!window.Streamlit) {
+              await new Promise(resolve => setTimeout(resolve, 50));
+            }
+            const fp = await FingerprintJS.load();
+            const result = await fp.get();
+            window.Streamlit.setComponentValue(result.visitorId);
+        } catch (error) {
+            console.error("FingerprintJS error:", error);
+            window.Streamlit.setComponentValue({ "error": error.message });
+        }
+      })();
     </script>
     """
-    return components.html(js_code, height=60)
+    return components.html(js_code, height=0)
 
 def main():
     st.title("活動報到系統 / Event Check-in System")
@@ -143,27 +139,34 @@ def main():
 
     client = get_gsheet()
     if client is None:
+        st.error("嚴重錯誤：無法連線至 Google Sheets。請檢查 Streamlit Secrets。")
         st.stop()
 
     for key, default in [('authenticated', False), ('search_term', ''), ('feedback', None), ('fingerprint_id', None)]:
         if key not in st.session_state: st.session_state[key] = default
 
-    is_ready = st.session_state.fingerprint_id is not None and isinstance(st.session_state.fingerprint_id, str)
-    
-    settings = get_settings(client, GOOGLE_SHEET_NAME)
-    st.info(f"**目前模式 / Current Mode:** `{settings['mode']}`")
-
-    if not is_ready:
-        st.info("第一步：請點擊下方按鈕以載入您的裝置識別碼。\nStep 1: Please click the button below to load your device ID.")
-        component_return_value = render_fingerprint_button_component()
+    # --- 關鍵的裝置識別碼獲取 ---
+    if st.session_state.fingerprint_id is None:
+        component_return_value = get_fingerprint_component()
+        
         if component_return_value:
             if isinstance(component_return_value, str):
                 st.session_state.fingerprint_id = component_return_value
             else:
                 st.error("無法獲取裝置識別碼，請刷新頁面再試一次。")
-            st.rerun()
+                st.code(component_return_value)
+            st.rerun() # 獲取到 ID 後，立即重跑一次以更新 UI 狀態
     
-    st.text_input("您的裝置識別碼 / Your Device ID", value=st.session_state.fingerprint_id if is_ready else "尚未獲取", disabled=True)
+    is_ready = st.session_state.fingerprint_id is not None and isinstance(st.session_state.fingerprint_id, str)
+
+    settings = get_settings(client, GOOGLE_SHEET_NAME)
+    st.info(f"**目前模式 / Current Mode:** `{settings['mode']}`")
+
+    st.text_input(
+        "您的裝置識別碼 / Your Device ID",
+        value=st.session_state.fingerprint_id if is_ready else "正在獲取識別碼...",
+        disabled=True
+    )
     
     with st.sidebar.expander("管理員面板 / Admin Panel", expanded=False):
         if not st.session_state.authenticated:
@@ -188,7 +191,12 @@ def main():
 
     st.markdown("---")
 
-    st.session_state.search_term = st.text_input("請輸入員工編號或姓名:", value=st.session_state.search_term, key="search_input", disabled=not is_ready).strip()
+    st.session_state.search_term = st.text_input(
+        "請輸入員工編號或姓名:", 
+        value=st.session_state.search_term, 
+        key="search_input", 
+        disabled=not is_ready # 關鍵：只有在 ID 獲取成功後才啟用
+    ).strip()
 
     if st.button("確認 / Confirm", disabled=not is_ready):
         now = datetime.now(pytz.timezone(TIMEZONE)).time()
