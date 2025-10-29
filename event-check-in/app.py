@@ -1,7 +1,7 @@
-# app_v2.7.1.py (Robust Connection Handling)
+# app_v2.8.0.py (Modern Auth & Crash Fix)
 import streamlit as st
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+from google.oauth2.service_account import Credentials # Using modern google-auth library
 import pandas as pd
 from gspread_dataframe import get_as_dataframe
 from datetime import datetime, time
@@ -9,7 +9,7 @@ import pytz
 import streamlit.components.v1 as components
 
 # --- App Version ---
-VERSION = "2.7.1 (Robust Connection)"
+VERSION = "2.8.0 (Modern Auth)"
 
 # --- Configuration ---
 TIMEZONE = "Asia/Taipei"
@@ -45,37 +45,33 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-
 # --- Google Sheets Connection & Data Functions ---
 @st.cache_resource(ttl=600)
 def get_gsheet():
-    """
-    Establishes a connection to Google Sheets with robust error handling.
-    """
+    """Establishes a connection to Google Sheets using the modern google-auth library."""
     try:
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        # This is a common point of failure if secrets are not set correctly.
         creds_dict = st.secrets.get("gcp_service_account")
         if not creds_dict:
-            st.error("GCP Service Account secrets not found in st.secrets. Please configure them.")
+            st.error("GCP Service Account secrets not found. Please configure `[gcp_service_account]` in your Streamlit Secrets.")
             return None
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
         client = gspread.authorize(creds)
         return client
     except Exception as e:
         st.error(f"Google Sheets 連線失敗 / Google Sheets connection failed: {e}")
-        st.info("請確認您的 Streamlit Secrets (`[gcp_service_account]`) 是否已正確設定。 / Please ensure your Streamlit Secrets for `[gcp_service_account]` are configured correctly.")
+        st.info("請確認您的 Streamlit Secrets (`[gcp_service_account]`) 是否已正確設定，且服務帳號已被授權編輯您的 Google Sheet。")
         return None
 
 @st.cache_data(ttl=30)
 def get_data(_client, sheet_name, worksheet_name):
-    if _client is None: return pd.DataFrame() # Don't proceed if connection failed
+    if _client is None: return pd.DataFrame()
     try:
         sheet = _client.open(sheet_name).worksheet(worksheet_name)
         data = get_as_dataframe(sheet, evaluate_formulas=True)
         for col in ['EmployeeID', 'DeviceFingerprint']:
-            if col in data.columns:
-                data[col] = data[col].astype(str).str.strip()
+            if col in data.columns: data[col] = data[col].astype(str).str.strip()
         return data.dropna(how='all')
     except gspread.exceptions.WorksheetNotFound:
         st.error(f"找不到工作表 '{worksheet_name}' / Worksheet '{worksheet_name}' not found.")
@@ -85,7 +81,7 @@ def get_data(_client, sheet_name, worksheet_name):
         return pd.DataFrame()
 
 def update_cell(client, sheet_name, worksheet_name, row, col, value):
-    if client is None: return # Don't proceed if connection failed
+    if client is None: return
     try:
         sheet = client.open(sheet_name).worksheet(worksheet_name)
         sheet.update_cell(row, col, value)
@@ -95,25 +91,18 @@ def update_cell(client, sheet_name, worksheet_name, row, col, value):
 
 @st.cache_data(ttl=60)
 def get_settings(_client, sheet_name):
-    if _client is None: # Return default settings if connection failed
-        return {"mode": "Check-in", "start_time": time(9, 0), "end_time": time(17, 0)}
+    if _client is None: return {"mode": "Check-in", "start_time": time(9, 0), "end_time": time(17, 0)}
     try:
         settings_sheet = _client.open(sheet_name).worksheet("Settings")
         mode = settings_sheet.acell('A2').value
-        start_time_str = settings_sheet.acell('B2').value
-        end_time_str = settings_sheet.acell('C2').value
-        start_time = datetime.strptime(start_time_str, '%H:%M').time() if start_time_str else time(9, 0)
-        end_time = datetime.strptime(end_time_str, '%H:%M').time() if end_time_str else time(17, 0)
+        start_time = datetime.strptime(settings_sheet.acell('B2').value, '%H:%M').time()
+        end_time = datetime.strptime(settings_sheet.acell('C2').value, '%H:%M').time()
         return {"mode": mode, "start_time": start_time, "end_time": end_time}
-    except gspread.exceptions.WorksheetNotFound:
-        st.error("找不到 'Settings' 工作表，將使用預設值。 / 'Settings' worksheet not found, using default values.")
-        return {"mode": "Check-in", "start_time": time(9, 0), "end_time": time(17, 0)}
-    except Exception as e:
-        st.warning(f"讀取設定失敗 ({e})，將使用預設值。 / Failed to read settings ({e}), using default values.")
+    except Exception:
         return {"mode": "Check-in", "start_time": time(9, 0), "end_time": time(17, 0)}
 
 def save_settings(client, sheet_name, mode, start_time, end_time):
-    if client is None: return # Don't proceed if connection failed
+    if client is None: return
     try:
         settings_sheet = client.open(sheet_name).worksheet("Settings")
         settings_sheet.update('A2:C2', [[mode, start_time.strftime('%H:%M'), end_time.strftime('%H:%M')]])
@@ -123,7 +112,6 @@ def save_settings(client, sheet_name, mode, start_time, end_time):
         st.error(f"儲存設定失敗 / Failed to save settings: {e}")
 
 def render_fingerprint_button_component():
-    """Renders an HTML component with a button that gets the fingerprint."""
     js_code = """
     <div style="display: flex; justify-content: center; margin: 1rem 0;">
         <button id="fp_button" style="padding: 10px 24px; font-size: 16px; cursor: pointer;">
@@ -135,14 +123,10 @@ def render_fingerprint_button_component():
       const button = document.getElementById('fp_button');
       if (button) {
         button.onclick = function() {
-          this.disabled = true;
-          this.textContent = '讀取中... / Loading...';
-          FingerprintJS.load()
-            .then(fp => fp.get())
-            .then(result => {
+          this.disabled = true; this.textContent = '讀取中... / Loading...';
+          FingerprintJS.load().then(fp => fp.get()).then(result => {
               window.Streamlit.setComponentValue(result.visitorId);
-            })
-            .catch(err => {
+            }).catch(err => {
                 console.error('FingerprintJS error:', err);
                 this.textContent = '獲取失敗，請重試 / Error, please retry';
                 window.Streamlit.setComponentValue({ "error": err.message });
@@ -158,84 +142,11 @@ def main():
     st.markdown(f"<p style='text-align: right; color: grey;'>v{VERSION}</p>", unsafe_allow_html=True)
 
     client = get_gsheet()
-    # If the connection failed, stop rendering the rest of the app.
     if client is None:
         st.stop()
 
-    # Initialize state variables
-    if 'authenticated' not in st.session_state: st.session_state.authenticated = False
-    if 'search_term' not in st.session_state: st.session_state.search_term = ''
-    if 'feedback' not in st.session_state: st.session_state.feedback = None
-    if 'fingerprint_id' not in st.session_state: st.session_state.fingerprint_id = None
-
-    is_ready = st.session_state.fingerprint_id is not None and isinstance(st.session_state.fingerprint_id, str)
-    
-    settings = get_settings(client, GOOGLE_SHEET_NAME)
-    st.info(f"**目前模式 / Current Mode:** `{settings['mode']}`")
-
-    if not is_ready:
-        st.info("第一步：請點擊下方按鈕以載入您的裝置識別碼。\nStep 1: Please click the button below to load your device ID.")
-        component_return_value = render_fingerprint_button_component()
-        if component_return_value:
-            if isinstance(component_return_value, str):
-                st.session_state.fingerprint_id = component_return_value
-            else: # Handle potential error object from JS
-                st.session_state.fingerprint_id = None
-                st.error("無法獲取裝置識別碼，請刷新頁面再試一次。 / Could not get device ID. Please refresh and try again.")
-            st.rerun()
-    
-    st.text_input(
-        "您的裝置識別碼 / Your Device ID",
-        value=st.session_state.fingerprint_id if is_ready else "尚未獲取 / Not yet acquired",
-        disabled=True
-    )
-    
-    with st.sidebar.expander("管理員面板 / Admin Panel", expanded=False):
-        # Admin Panel Logic ... (omitted for brevity, it's the same as before)
-        pass
-
-    if st.session_state.feedback:
-        # Feedback logic ... (omitted for brevity)
-        pass
-
-    st.markdown("---")
-
-    st.session_state.search_term = st.text_input(
-        "請輸入您的員工編號或姓名 / Please enter your Employee ID or Name:",
-        value=st.session_state.search_term,
-        key="search_input",
-        disabled=not is_ready
-    ).strip()
-
-    if st.button("確認 / Confirm", disabled=not is_ready):
-        # Button click logic ... (omitted for brevity)
-        pass
-
-def process_request(df, settings, client, final_fingerprint):
-    # Process request logic ... (omitted for brevity)
-    pass
-
-if __name__ == "__main__":
-    main()
-
-# NOTE: The omitted sections (Admin Panel, Feedback, Button Click, Process Request) 
-# are identical to the previous version (v2.7.0) to keep this code block focused on the fix.
-# Please ensure you have the full code from the previous version for those parts.
-# --- FULL CODE FOR COPY/PASTE IS BELOW ---
-
-# Full main function for easy copy-paste
-def main_full():
-    st.title("活動報到系統 / Event Check-in System")
-    st.markdown(f"<p style='text-align: right; color: grey;'>v{VERSION}</p>", unsafe_allow_html=True)
-
-    client = get_gsheet()
-    if client is None:
-        st.stop()
-
-    if 'authenticated' not in st.session_state: st.session_state.authenticated = False
-    if 'search_term' not in st.session_state: st.session_state.search_term = ''
-    if 'feedback' not in st.session_state: st.session_state.feedback = None
-    if 'fingerprint_id' not in st.session_state: st.session_state.fingerprint_id = None
+    for key, default in [('authenticated', False), ('search_term', ''), ('feedback', None), ('fingerprint_id', None)]:
+        if key not in st.session_state: st.session_state[key] = default
 
     is_ready = st.session_state.fingerprint_id is not None and isinstance(st.session_state.fingerprint_id, str)
     
@@ -249,30 +160,24 @@ def main_full():
             if isinstance(component_return_value, str):
                 st.session_state.fingerprint_id = component_return_value
             else:
-                st.session_state.fingerprint_id = None
-                st.error("無法獲取裝置識別碼，請刷新頁面再試一次。 / Could not get device ID. Please refresh and try again.")
+                st.error("無法獲取裝置識別碼，請刷新頁面再試一次。")
             st.rerun()
     
-    st.text_input(
-        "您的裝置識別碼 / Your Device ID",
-        value=st.session_state.fingerprint_id if is_ready else "尚未獲取 / Not yet acquired",
-        disabled=True
-    )
+    st.text_input("您的裝置識別碼 / Your Device ID", value=st.session_state.fingerprint_id if is_ready else "尚未獲取", disabled=True)
     
     with st.sidebar.expander("管理員面板 / Admin Panel", expanded=False):
         if not st.session_state.authenticated:
-            password = st.text_input("請輸入密碼 / Password:", type="password", key="admin_password")
-            if st.button("登入 / Login"):
-                if password == st.secrets.admin.password:
-                    st.session_state.authenticated = True; st.rerun()
-                else: st.error("密碼錯誤 / Incorrect Password")
+            password = st.text_input("密碼:", type="password", key="admin_pw")
+            if st.button("登入"):
+                if password == st.secrets.admin.password: st.session_state.authenticated = True; st.rerun()
+                else: st.error("密碼錯誤")
         else:
-            st.success("已認證 / Authenticated")
-            mode = st.radio("模式 / Mode", ["Check-in", "Check-out"], index=["Check-in", "Check-out"].index(settings['mode']))
-            start_time = st.time_input("開始時間 / Start Time", settings['start_time'])
-            end_time = st.time_input("結束時間 / End Time", settings['end_time'])
-            if st.button("儲存設定 / Save Settings"): save_settings(client, GOOGLE_SHEET_NAME, mode, start_time, end_time)
-            if st.button("登出 / Logout"): st.session_state.authenticated = False; st.rerun()
+            st.success("已認證")
+            mode = st.radio("模式", ["Check-in", "Check-out"], index=["Check-in", "Check-out"].index(settings['mode']))
+            start_time = st.time_input("開始時間", settings['start_time'])
+            end_time = st.time_input("結束時間", settings['end_time'])
+            if st.button("儲存設定"): save_settings(client, GOOGLE_SHEET_NAME, mode, start_time, end_time)
+            if st.button("登出"): st.session_state.authenticated = False; st.rerun()
 
     if st.session_state.feedback:
         msg_type, msg_text = st.session_state.feedback.values()
@@ -283,73 +188,55 @@ def main_full():
 
     st.markdown("---")
 
-    st.session_state.search_term = st.text_input(
-        "請輸入您的員工編號或姓名 / Please enter your Employee ID or Name:",
-        value=st.session_state.search_term,
-        key="search_input",
-        disabled=not is_ready
-    ).strip()
+    st.session_state.search_term = st.text_input("請輸入員工編號或姓名:", value=st.session_state.search_term, key="search_input", disabled=not is_ready).strip()
 
     if st.button("確認 / Confirm", disabled=not is_ready):
-        tz = pytz.timezone(TIMEZONE)
-        now = datetime.now(tz).time()
-        fingerprint = st.session_state.fingerprint_id
-
+        now = datetime.now(pytz.timezone(TIMEZONE)).time()
         if not (settings['start_time'] <= now <= settings['end_time']):
-            st.session_state.feedback = {"type": "warning", "text": "報到尚未開始或已結束 / Check-in is not yet open or has already closed."}
+            st.session_state.feedback = {"type": "warning", "text": "報到尚未開始或已結束"}
         elif not st.session_state.search_term:
-            st.session_state.feedback = {"type": "error", "text": "請輸入您的員工編號或姓名 / Please enter your Employee ID or Name"}
+            st.session_state.feedback = {"type": "error", "text": "請輸入員工編號或姓名"}
         else:
-            with st.spinner("正在處理 / Processing..."):
+            with st.spinner("正在處理..."):
                 df = get_data(client, GOOGLE_SHEET_NAME, WORKSHEET_NAME)
                 if not df.empty:
-                    process_request(df, settings, client, fingerprint)
-        
+                    process_request(df, settings, client, st.session_state.fingerprint_id)
         st.session_state.search_term = ""
         st.rerun()
 
-def process_request_full(df, settings, client, final_fingerprint):
+def process_request(df, settings, client, final_fingerprint):
     search_term = st.session_state.search_term.lower()
-    id_match = df[df['EmployeeID'].str.lower() == search_term] if 'EmployeeID' in df.columns else pd.DataFrame()
-    name_match = df[df['Name'].str.lower() == search_term] if 'Name' in df.columns else pd.DataFrame()
+    id_match = df[df['EmployeeID'].str.lower() == search_term]
+    name_match = df[df['Name'].str.lower() == search_term]
     employee_row = pd.DataFrame()
 
     if not id_match.empty: employee_row = id_match.iloc[[0]]
     elif not name_match.empty:
         if len(name_match) == 1: employee_row = name_match.iloc[[0]]
-        else:
-            st.session_state.feedback = {"type": "warning", "text": "找到多位同名員工，請改用員工編號搜尋 / Multiple employees found with the same name, please use Employee ID."}
-            return
-    else:
-        st.session_state.feedback = {"type": "error", "text": "查無此人，請確認輸入是否正確 / User not found, please check your input."}
-        return
+        else: st.session_state.feedback = {"type": "warning", "text": "找到多位同名員工，請改用員工編號"}; return
+    else: st.session_state.feedback = {"type": "error", "text": "查無此人，請確認輸入是否正確"}; return
 
     row_index = employee_row.index[0] + 2
     name = employee_row['Name'].iloc[0]
     timestamp = datetime.now(pytz.timezone(TIMEZONE)).strftime("%Y-%m-%d %H:%M:%S")
 
     if settings['mode'] == "Check-in":
-        if pd.notna(employee_row['CheckInTime'].iloc[0]) and str(employee_row['CheckInTime'].iloc[0]).strip() != '':
-            st.session_state.feedback = {"type": "warning", "text": f"{name}, 您已報到，無須重複操作 / you have already checked in."}
+        if pd.notna(employee_row['CheckInTime'].iloc[0]) and str(employee_row['CheckInTime'].iloc[0]).strip():
+            st.session_state.feedback = {"type": "warning", "text": f"{name}, 您已報到，無須重複操作"}
         elif 'DeviceFingerprint' in df.columns and not df[df['DeviceFingerprint'] == final_fingerprint].empty:
-            st.session_state.feedback = {"type": "error", "text": "此裝置已用於報到，請勿代他人操作 / This device has already been used to check in."}
+            st.session_state.feedback = {"type": "error", "text": "此裝置已用於報到，請勿代他人操作"}
         else:
             table_no = employee_row['TableNo'].iloc[0]
-            if 'CheckInTime' in df.columns:
-                update_cell(client, GOOGLE_SHEET_NAME, WORKSHEET_NAME, row_index, df.columns.get_loc('CheckInTime') + 1, timestamp)
+            update_cell(client, GOOGLE_SHEET_NAME, WORKSHEET_NAME, row_index, df.columns.get_loc('CheckInTime') + 1, timestamp)
             if 'DeviceFingerprint' in df.columns:
                  update_cell(client, GOOGLE_SHEET_NAME, WORKSHEET_NAME, row_index, df.columns.get_loc('DeviceFingerprint') + 1, final_fingerprint)
-            st.session_state.feedback = {"type": "success", "text": f"報到成功！歡迎 {name}，您的桌號是 {table_no} / Check-in successful! Welcome {name}, your table number is {table_no}."}
+            st.session_state.feedback = {"type": "success", "text": f"報到成功！歡迎 {name}，您的桌號是 {table_no}"}
     else: # Check-out Mode
-        if pd.notna(employee_row['CheckOutTime'].iloc[0]) and str(employee_row['CheckOutTime'].iloc[0]).strip() != '':
-            st.session_state.feedback = {"type": "warning", "text": f"{name}, 您已完成簽退 / you have already checked out."}
+        if pd.notna(employee_row['CheckOutTime'].iloc[0]) and str(employee_row['CheckOutTime'].iloc[0]).strip():
+            st.session_state.feedback = {"type": "warning", "text": f"{name}, 您已完成簽退"}
         else:
-            if 'CheckOutTime' in df.columns:
-                update_cell(client, GOOGLE_SHEET_NAME, WORKSHEET_NAME, row_index, df.columns.get_loc('CheckOutTime') + 1, timestamp)
-            st.session_state.feedback = {"type": "success", "text": f"簽退成功，{name}，祝您有個美好的一天！ / Check-out successful, {name}, have a nice day!"}
+            update_cell(client, GOOGLE_SHEET_NAME, WORKSHEET_NAME, row_index, df.columns.get_loc('CheckOutTime') + 1, timestamp)
+            st.session_state.feedback = {"type": "success", "text": f"簽退成功，{name}，祝您有個美好的一天！"}
 
-# Replace the placeholder functions with the full ones for the final script
 if __name__ == "__main__":
-    # To run this, you'd replace main with main_full and process_request with process_request_full
-    # For the user, provide the full, single script.
-    pass
+    main()
