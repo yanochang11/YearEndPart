@@ -1,4 +1,4 @@
-# app_v2.5.0.py (Optimized Fingerprinting)
+# app_v2.7.0.py (Button-Triggered Fingerprinting)
 import streamlit as st
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -9,7 +9,7 @@ import pytz
 import streamlit.components.v1 as components
 
 # --- App Version ---
-VERSION = "2.5.0 (Auto Fingerprinting)"
+VERSION = "2.7.0 (Button-Triggered)"
 
 # --- Configuration ---
 TIMEZONE = "Asia/Taipei"
@@ -32,10 +32,17 @@ st.markdown("""
     }
     body { background-color: #f0f2f6; }
     h1 { color: #1a1a1a; font-weight: 600; }
-    div[data-testid="stTextInput"] > div > div > input[disabled], 
+    /* Style for disabled elements */
+    div[data-testid="stTextInput"] > div > div > input[disabled],
     div[data-testid="stButton"] > button[disabled] {
         background-color: #e9ecef;
         cursor: not-allowed;
+    }
+    /* Ensure the disabled fingerprint input has a specific look */
+    input[aria-label="您的裝置識別碼 / Your Device ID"] {
+        background-color: #f0f2f6 !important;
+        color: #555 !important;
+        border: 1px solid #ced4da !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -90,91 +97,90 @@ def save_settings(client, sheet_name, mode, start_time, end_time):
         st.success("設定已儲存! / Settings saved!")
     except Exception as e:
         st.error(f"儲存設定失敗 / Failed to save settings: {e}")
-        
-def get_fingerprint_component():
-    """Renders the JS component to get the device fingerprint and return it to Streamlit."""
+
+def render_fingerprint_button_component():
+    """Renders an HTML component with a button that, when clicked, gets the fingerprint."""
     js_code = """
+    <div style="display: flex; justify-content: center; margin: 1rem 0;">
+        <button id="fp_button" style="padding: 10px 24px; font-size: 16px; cursor: pointer;">
+            獲取裝置識別碼 / Get Device ID
+        </button>
+    </div>
     <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
     <script>
-      (async () => {
-        // Flag to ensure this runs only once
-        if (window.fingerprintJsExecuted) {
-            return;
-        }
-        window.fingerprintJsExecuted = true;
-        try {
-            // Wait for Streamlit to be ready
-            while (!window.Streamlit) {
-              await new Promise(resolve => setTimeout(resolve, 50));
-            }
-            const fp = await FingerprintJS.load();
-            const result = await fp.get();
-            // Send the visitorId back to the Python backend
-            window.Streamlit.setComponentValue(result.visitorId);
-        } catch (error) {
-            console.error("FingerprintJS error:", error);
-            window.Streamlit.setComponentValue({ "error": error.message });
-        }
-      })();
+      const button = document.getElementById('fp_button');
+      if (button) {
+        button.onclick = function() {
+          this.disabled = true;
+          this.textContent = '讀取中... / Loading...';
+          const fpPromise = FingerprintJS.load();
+          fpPromise
+            .then(fp => fp.get())
+            .then(result => {
+              // Send the visitorId back to Streamlit
+              window.Streamlit.setComponentValue(result.visitorId);
+            })
+            .catch(err => {
+                console.error('FingerprintJS error:', err);
+                this.textContent = '獲取失敗，請重試 / Error, please retry';
+                window.Streamlit.setComponentValue({ "error": err.message });
+            });
+        };
+      }
     </script>
     """
-    return components.html(js_code, height=0)
+    return components.html(js_code, height=60)
 
 def main():
     st.title("活動報到系統 / Event Check-in System")
     st.markdown(f"<p style='text-align: right; color: grey;'>v{VERSION}</p>", unsafe_allow_html=True)
 
     # Initialize state variables
-    if 'authenticated' not in st.session_state:
-        st.session_state.authenticated = False
-    if 'search_term' not in st.session_state:
-        st.session_state.search_term = ''
-    if 'feedback' not in st.session_state:
-        st.session_state.feedback = None
-    if 'fingerprint_id' not in st.session_state:
-        st.session_state.fingerprint_id = None
-        
-    # --- 1. Fingerprint Acquisition ---
-    # This component will run on the first load and send the result back.
-    if st.session_state.fingerprint_id is None:
-        component_return_value = get_fingerprint_component()
-        if component_return_value:
-            st.session_state.fingerprint_id = component_return_value
-            st.rerun() # Rerun to update the UI now that we have the ID
+    if 'authenticated' not in st.session_state: st.session_state.authenticated = False
+    if 'search_term' not in st.session_state: st.session_state.search_term = ''
+    if 'feedback' not in st.session_state: st.session_state.feedback = None
+    if 'fingerprint_id' not in st.session_state: st.session_state.fingerprint_id = None
 
     is_ready = st.session_state.fingerprint_id is not None and isinstance(st.session_state.fingerprint_id, str)
-    
-    # --- 2. Main Application Flow ---
+
     client = get_gsheet()
     settings = get_settings(client, GOOGLE_SHEET_NAME)
-    
-    # Display current mode and a status message for fingerprinting
     st.info(f"**目前模式 / Current Mode:** `{settings['mode']}`")
+
+    # --- 1. Fingerprint Acquisition ---
     if not is_ready:
-        st.warning("🔄 正在獲取裝置識別碼，請稍候... / Acquiring device ID, please wait...")
+        st.info("第一步：請點擊下方按鈕以載入您的裝置識別碼。\nStep 1: Please click the button below to load your device ID.")
+        component_return_value = render_fingerprint_button_component()
+        if component_return_value:
+            if isinstance(component_return_value, str):
+                st.session_state.fingerprint_id = component_return_value
+            else:
+                st.session_state.fingerprint_id = None
+                st.error("無法獲取裝置識別碼，請刷新頁面再試一次。 / Could not get device ID. Please refresh and try again.")
+            st.rerun()
     
-    # Admin Panel
+    # --- 2. Display and Admin Panel ---
+    st.text_input(
+        "您的裝置識別碼 / Your Device ID",
+        value=st.session_state.fingerprint_id if is_ready else "尚未獲取 / Not yet acquired",
+        disabled=True
+    )
+    
     with st.sidebar.expander("管理員面板 / Admin Panel", expanded=False):
         if not st.session_state.authenticated:
             password = st.text_input("請輸入密碼 / Password:", type="password", key="admin_password")
             if st.button("登入 / Login"):
                 if password == st.secrets.admin.password:
-                    st.session_state.authenticated = True
-                    st.rerun()
-                else:
-                    st.error("密碼錯誤 / Incorrect Password")
+                    st.session_state.authenticated = True; st.rerun()
+                else: st.error("密碼錯誤 / Incorrect Password")
         else:
             st.success("已認證 / Authenticated")
             mode = st.radio("模式 / Mode", ["Check-in", "Check-out"], index=["Check-in", "Check-out"].index(settings['mode']))
             start_time = st.time_input("開始時間 / Start Time", settings['start_time'])
             end_time = st.time_input("結束時間 / End Time", settings['end_time'])
-            if st.button("儲存設定 / Save Settings"):
-                save_settings(client, GOOGLE_SHEET_NAME, mode, start_time, end_time)
-            if st.button("登出 / Logout"):
-                st.session_state.authenticated = False
-                st.rerun()
-    
-    # Feedback display
+            if st.button("儲存設定 / Save Settings"): save_settings(client, GOOGLE_SHEET_NAME, mode, start_time, end_time)
+            if st.button("登出 / Logout"): st.session_state.authenticated = False; st.rerun()
+
     if st.session_state.feedback:
         msg_type, msg_text = st.session_state.feedback.values()
         if msg_type == "success": st.success(msg_text)
@@ -182,15 +188,17 @@ def main():
         elif msg_type == "error": st.error(msg_text)
         st.session_state.feedback = None
 
+    st.markdown("---")
+
     # --- 3. User Interaction UI ---
     st.session_state.search_term = st.text_input(
         "請輸入您的員工編號或姓名 / Please enter your Employee ID or Name:",
         value=st.session_state.search_term,
         key="search_input",
-        disabled=not is_ready # Disable until fingerprint is ready
+        disabled=not is_ready
     ).strip()
 
-    if st.button("確認 / Confirm", disabled=not is_ready): # Disable until fingerprint is ready
+    if st.button("確認 / Confirm", disabled=not is_ready):
         tz = pytz.timezone(TIMEZONE)
         now = datetime.now(tz).time()
         fingerprint = st.session_state.fingerprint_id
@@ -205,21 +213,18 @@ def main():
                 if not df.empty:
                     process_request(df, settings, client, fingerprint)
         
-        st.session_state.search_term = "" # Clear input after processing
+        st.session_state.search_term = ""
         st.rerun()
 
 def process_request(df, settings, client, final_fingerprint):
     search_term = st.session_state.search_term.lower()
-    # Ensure columns exist before searching
     id_match = df[df['EmployeeID'].str.lower() == search_term] if 'EmployeeID' in df.columns else pd.DataFrame()
     name_match = df[df['Name'].str.lower() == search_term] if 'Name' in df.columns else pd.DataFrame()
     employee_row = pd.DataFrame()
 
-    if not id_match.empty:
-        employee_row = id_match.iloc[[0]]
+    if not id_match.empty: employee_row = id_match.iloc[[0]]
     elif not name_match.empty:
-        if len(name_match) == 1:
-            employee_row = name_match.iloc[[0]]
+        if len(name_match) == 1: employee_row = name_match.iloc[[0]]
         else:
             st.session_state.feedback = {"type": "warning", "text": "找到多位同名員工，請改用員工編號搜尋 / Multiple employees found with the same name, please use Employee ID."}
             return
@@ -238,7 +243,6 @@ def process_request(df, settings, client, final_fingerprint):
             st.session_state.feedback = {"type": "error", "text": "此裝置已用於報到，請勿代他人操作 / This device has already been used to check in."}
         else:
             table_no = employee_row['TableNo'].iloc[0]
-            # Ensure target columns exist
             if 'CheckInTime' in df.columns:
                 update_cell(client, GOOGLE_SHEET_NAME, WORKSHEET_NAME, row_index, df.columns.get_loc('CheckInTime') + 1, timestamp)
             if 'DeviceFingerprint' in df.columns:
