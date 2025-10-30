@@ -2,7 +2,7 @@ streamlit
 gspread
 pandas
 gspread-dataframe
-oauth2client
+google-auth
 pytz
 streamlit-cookies-manager
 streamlit-javascript
