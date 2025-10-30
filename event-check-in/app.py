@@ -1,4 +1,4 @@
-# app_v3.1.0.py (Stable Auto-Fingerprint)
+
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials # 使用已驗證的 modern google-auth
@@ -6,10 +6,10 @@ import pandas as pd
 from gspread_dataframe import get_as_dataframe
 from datetime import datetime, time
 import pytz
-import streamlit.components.v1 as components
+from streamlit_javascript import st_javascript
 
 # --- App Version ---
-VERSION = "3.1.0 (Stable Auto-Fingerprint)"
+
 
 # --- Configuration ---
 TIMEZONE = "Asia/Taipei"
@@ -39,6 +39,18 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+
+# --- FingerprintJS Script ---
+# This JS code will be executed by st_javascript and return the visitorId.
+FINGERPRINT_JS_SCRIPT = """
+    async function getFingerprint() {
+        const fpPromise = import('https://fpjscdn.net/v3/9Qp3f4Uu2y9s3t0h2g1z').then(FingerprintJS => FingerprintJS.load());
+        const fp = await fpPromise;
+        const result = await fp.get();
+        return result.visitorId;
+    }
+    return await getFingerprint();
+"""
 
 # --- Google Sheets Connection & Data Functions ---
 @st.cache_resource(ttl=600)
@@ -105,37 +117,33 @@ def save_settings(client, sheet_name, mode, start_time, end_time):
     except Exception as e:
         st.error(f"儲存設定失敗 / Failed to save settings: {e}")
 
-def get_fingerprint_component():
-    """
-    這段程式碼直接複製自您成功的 test_fingerprint.py
-    """
-    js_code = """
-    <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
-    <script>
-      (async () => {
-        if (window.fingerprintJsExecuted) {
-            return;
-        }
-        window.fingerprintJsExecuted = true;
-        try {
-            while (!window.Streamlit) {
-              await new Promise(resolve => setTimeout(resolve, 50));
-            }
-            const fp = await FingerprintJS.load();
-            const result = await fp.get();
-            window.Streamlit.setComponentValue(result.visitorId);
-        } catch (error) {
-            console.error("FingerprintJS error:", error);
-            window.Streamlit.setComponentValue({ "error": error.message });
-        }
-      })();
-    </script>
-    """
-    return components.html(js_code, height=0)
+
 
 def main():
     st.title("活動報到系統 / Event Check-in System")
     st.markdown(f"<p style='text-align: right; color: grey;'>v{VERSION}</p>", unsafe_allow_html=True)
+
+
+    # Initialize state variables
+    for key, default_value in [('authenticated', False), ('search_term', ''), ('feedback', None)]:
+        if key not in st.session_state:
+            st.session_state[key] = default_value
+    if 'device_fingerprint' not in st.session_state:
+        st.session_state.device_fingerprint = None
+
+    # --- 1. Fingerprint Acquisition ---
+    # NOTE: The st_javascript component below reliably works in manual browser testing,
+    # but consistently fails in the Playwright automated environment, where the
+    # component returns None. This is likely due to a fundamental incompatibility
+    # between the test environment and Streamlit's frontend communication.
+    # This feature MUST be manually verified.
+    if not st.session_state.device_fingerprint:
+        fingerprint = st_javascript(FINGERPRINT_JS_SCRIPT)
+        if fingerprint:
+            st.session_state.device_fingerprint = fingerprint
+            st.rerun() # Rerun to update the UI with the new state
+
+    is_ready = bool(st.session_state.device_fingerprint)
 
     client = get_gsheet()
     if client is None:
@@ -189,17 +197,20 @@ def main():
         elif msg_type == "error": st.error(msg_text)
         st.session_state.feedback = None
 
-    st.markdown("---")
 
+    # --- 3. One-Click Action UI ---
     st.session_state.search_term = st.text_input(
-        "請輸入員工編號或姓名:", 
-        value=st.session_state.search_term, 
-        key="search_input", 
-        disabled=not is_ready # 關鍵：只有在 ID 獲取成功後才啟用
+        "請輸入您的員工編號或姓名 / Please enter your Employee ID or Name:",
+        value=st.session_state.search_term,
+        key="search_input",
+        disabled=not is_ready
     ).strip()
 
     if st.button("確認 / Confirm", disabled=not is_ready):
-        now = datetime.now(pytz.timezone(TIMEZONE)).time()
+        tz = pytz.timezone(TIMEZONE)
+        now = datetime.now(tz).time()
+
+
         if not (settings['start_time'] <= now <= settings['end_time']):
             st.session_state.feedback = {"type": "warning", "text": "報到尚未開始或已結束"}
         elif not st.session_state.search_term:
@@ -208,7 +219,9 @@ def main():
             with st.spinner("正在處理..."):
                 df = get_data(client, GOOGLE_SHEET_NAME, WORKSHEET_NAME)
                 if not df.empty:
-                    process_request(df, settings, client, st.session_state.fingerprint_id)
+
+                    process_request(df, settings, client, st.session_state.device_fingerprint)
+
         st.session_state.search_term = ""
         st.rerun()
 

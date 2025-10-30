@@ -5,3 +5,4 @@ gspread-dataframe
 google-auth
 pytz
 streamlit-cookies-manager
+streamlit-javascript
